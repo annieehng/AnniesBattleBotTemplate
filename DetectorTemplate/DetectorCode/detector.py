@@ -11,4 +11,5 @@ class Detector(ADetector):
             marked_account.append(DetectionMark(user_id=user['id'], confidence=50, bot=False))
 
         return marked_account
-    
+
+# annie was here
