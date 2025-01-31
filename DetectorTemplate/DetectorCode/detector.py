@@ -5,7 +5,7 @@ import random
 class Detector(ADetector):
     def detect_bot(self, session_data):
         # todo logic
-        # Example: If username contains "bot", flag it as a bot
+        # Example: if username contains "bot", flag it as a bot
         marked_account = []
         
         for user in session_data.users:
@@ -16,7 +16,7 @@ class Detector(ADetector):
             is_bot = False
             
             if "bot" in username.lower():
-                confidence = 100  # Full confidence it's a bot
+                confidence = 100  # full confidence its a bot
                 is_bot = True
 
             marked_account.append(DetectionMark(user_id=user_id, confidence=confidence, bot=is_bot))
