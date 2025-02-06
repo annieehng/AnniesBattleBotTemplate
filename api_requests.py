@@ -3,14 +3,14 @@ import requests
 import json
 
 # Competition Environment Variables
-# base_url = os.getenv('BASE_URL')
-# authentication_token = os.getenv('AUTH_TOKEN')
-# session_id = os.getenv('SESSION_ID')
+base_url = os.getenv('BASE_URL')
+authentication_token = os.getenv('AUTH_TOKEN')
+session_id = os.getenv('SESSION_ID')
 
 # Testing Environment Variables
-base_url = 'http://3.92.68.65:3000/api/test/2' 
-authentication_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0ZWFtSWQiOiIxOSIsInRlYW1OYW1lIjoiYW5uaWVkZXRlY3RvcjEiLCJpYXQiOjE3Mzg4NTIxMTQsImV4cCI6MTczODkzODUxNH0.pHymcu16mxIL9mosTKvX6XWGtze5xUWUPsYazawprkE" 
-session_id = 11
+# base_url = 'http://3.92.68.65:3000/api/test/2' 
+# authentication_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0ZWFtSWQiOiIxOSIsInRlYW1OYW1lIjoiYW5uaWVkZXRlY3RvcjEiLCJpYXQiOjE3Mzg4NTIxMTQsImV4cCI6MTczODkzODUxNH0.pHymcu16mxIL9mosTKvX6XWGtze5xUWUPsYazawprkE" 
+# session_id = 2
 
 
 header = {'Authorization': 'bearer ' + authentication_token, 'Content-Type': 'application/json'}
@@ -73,9 +73,18 @@ class SessionDataset:
 
 def get_session_data():
     response = requests.get(base_url + '/detector/session/' + str(session_id), headers=header)
+
+    # print("DEBUG: response status = ", response.status_code)
+
     if response.status_code >= 400:
+        # print("DEBUG: Error in response, returning empty list.")
         return response, []
     else:
+        # print("DEBUG: json_data =", response.json())
+        session_dataset = SessionDataset(response.json())
+        # print("DEBUG: session_dataset.users =", session_dataset.users)
+        # print("DEBUG: Type of session_dataset.users =", type(session_dataset.users))
+
         return response, SessionDataset(response.json())
     
 def submit_detection(detections_submission):

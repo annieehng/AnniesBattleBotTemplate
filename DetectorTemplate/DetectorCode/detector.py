@@ -13,27 +13,60 @@ class Detector(ADetector):
             username = user["username"]
             tweet_count = user.get("tweet_count", 0)
             z_score = user.get("z_score", 0)
-            description = user["description"] or ""
-            location = user["location"] or ""
+            description = user.get("description", "")
+            if description:
+                description = description.strip().lower()
+            location = user.get("location", "")
+            if location:
+                location = location.strip()
 
             confidence = 0
             is_bot = False
 
-            # heuristics
-            if tweet_count > 1000:
-                confidence += 40
-            if z_score > 3:
+            # high tweet count 
+            if tweet_count > 5000:
+                confidence += 50
+            elif tweet_count > 1000:
                 confidence += 30
-            if "bot" in username.lower():
-                confidence += 20
-            if not description: # account has no profile desciption
-                confidence += 10
+            elif tweet_count < 5:  
+                confidence += 20  
+
+            # z-score 
+            if z_score > 5: # extremely high activity
+                confidence += 50  
+            elif z_score > 3:
+                confidence += 25
+            elif z_score > 2:
+                confidence += 10  
+
+            # judging the username 
+            num_count = sum(c.isdigit() for c in username)
+            if "bot" in username:
+                confidence += 40  
+            elif num_count >= 4:  
+                confidence += 30  
+            elif any(char in username for char in "_-.") and num_count >= 2:
+                confidence += 20  
+
+            # checking their profile 
+            if not description:
+                confidence += 20  
             if not location:
-                confidence += 5
-            
-            # check the confidence 
-            if confidence >= 50:
-                is_bot = True
+                confidence += 10  # 
+
+            # looking for suspicious keywords in bio description
+            spam_keywords = ["click here", "follow me", "free money", "crypto", "giveaway", "discount", "xxx", "adult", "onlyfans", "breaking news"]
+            if any(word in description for word in spam_keywords):
+                confidence += 40  
+
+            generic_phrases = ["manifesting", "positive vibes", "grateful", "dream big", "hustle", "motivation"]
+            if any(phrase in description for phrase in generic_phrases):
+                confidence += 20  
+
+            if confidence >= 40:
+                is_bot = True  
+
+            # print("RESULT = user: " + username + " is_bot: " + str(is_bot))  
 
             marked_account.append(DetectionMark(user_id=user_id, confidence=confidence, bot=is_bot))
 
