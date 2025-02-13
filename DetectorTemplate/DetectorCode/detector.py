@@ -2,8 +2,215 @@ from abc_classes import ADetector
 from teams_classes import DetectionMark
 import random
 
+import openai
+import language_tool_python
+import numpy as np
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+from transformers import pipeline
+import math
+
+
 class Detector(ADetector):
+    def __init__(self, openai_api_key, similarity_weight=0.3, sentiment_weight=0.2, grammar_weight=0.2, openai_weight=0.3, grammar_error_threshold=0.01, content_weight=0.6, profile_weight=0.4):
+        # set the OpenAI key
+        openai.api_key = openai_api_key
+
+        # weights to combine content signals
+        self.similarity_weight = similarity_weight
+        self.sentiment_weight = sentiment_weight
+        self.grammar_weight = grammar_weight
+        self.openai_weight = openai_weight
+        self.grammar_error_threshold = grammar_error_threshold
+
+        # weights for final combination -> content vs. profile-based signals
+        self.content_weight = content_weight
+        self.profile_weight = profile_weight
+        
+        # init sentiment analysis pipeline 
+        self.sentiment_analyzer = pipeline("sentiment-analysis", model="cardiffnlp/twitter-roberta-base-sentiment")
+        # init grammar tool
+        self.grammar_tool = language_tool_python.LanguageTool('en-US') # will modify once french tweets are implemented
+
+    def compute_similarity_score(self, texts):
+        if len(texts) < 2:
+            return 0
+        vectorizer = TfidfVectorizer()
+        tfidf_matrix = vectorizer.fit_transform(texts)
+        cosine_sim = cosine_similarity(tfidf_matrix)
+
+        # compute average of off-diagonal similarity scores
+        n = cosine_sim.shape[0]
+        sum_sim = np.sum(cosine_sim) - n  # subtract the diagonal ones (which are 1)
+        count = n * (n - 1)
+
+        return sum_sim / count if count > 0 else 0
+        
+    def compute_sentiment_score(self, texts):
+        if not texts:
+            return 0
+        scores = []
+        for text in texts:
+            try:
+                result = self.sentiment_analyzer(text)[0]
+                label = result['label']
+                score = result['score']
+                if label.lower() == 'neutral':
+                    scores.append(0)
+                else:
+                    scores.append(score)
+
+            except Exception:
+                scores.append(0)
+
+        return np.mean(scores)
+        
+    def compute_grammar_score(self, text):
+        words = text.split()
+        if len(words) == 0:
+            return 0
+        matches = self.grammar_tool.check(text)
+        error_rate = len(matches) / len(words)
+        # a low error rate (i.e. fewer errors) may indicate auto-generation
+        return max(0, 1 - error_rate / self.grammar_error_threshold) * 100 # convert score on a 0–100 scale
+        
+    def query_openai(self, text):
+        try:
+            # keep improving prompt for next competition
+            prompt = ( 
+                f"Rate the following text on how likely it is bot-generated on a scale of 0 to 100. "
+                f"Just provide a number.\nText: \"{text}\"\nAnswer:"
+            )
+            response = openai.Completion.create(
+                engine="text-davinci-003",
+                prompt=prompt,
+                max_tokens=5,
+                temperature=0
+            )
+            rating_str = response.choices[0].text.strip()
+            rating = float(rating_str)
+            return rating
+        
+        except Exception:
+            return 0
+        
     def detect_bot(self, session_data):
+        # todo logic: combine profile heuristics with signals using imported libraries, as well as OpenAI prompting
+
+        # group posts by user id
+        user_posts = {}
+        for post in session_data.posts:
+            author_id = post.get("author_id")
+            if author_id not in user_posts:
+                user_posts[author_id] = []
+            user_posts[author_id].append(post.get("text", ""))
+        
+        marked_account = []
+        for user in session_data.users:
+            user_id = user["id"]
+            texts = user_posts.get(user_id, [])
+            
+            # signals
+            sim_score = self.compute_similarity_score(texts) * 100
+            sentiment_score = self.compute_sentiment_score(texts) * 100
+            grammar_scores = [self.compute_grammar_score(text) for text in texts]
+            avg_grammar_score = np.mean(grammar_scores) if grammar_scores else 0
+            openai_score = self.query_openai(texts[0]) if texts else 0
+            
+            final_content_confidence = (
+                self.similarity_weight * sim_score +
+                self.sentiment_weight * sentiment_score +
+                self.grammar_weight * avg_grammar_score +
+                self.openai_weight * openai_score
+            )
+            
+            # profile data
+            profile_confidence = 0
+            tweet_count = user.get("tweet_count", 0)
+            z_score = user.get("z_score", 0)
+            username = user.get("username", "").lower()
+            description = (user.get("description") or "").strip()
+            location = user.get("location")
+            
+            # tweet count heuristics
+            if tweet_count > 5000:
+                profile_confidence += 50
+            elif tweet_count > 1000:
+                profile_confidence += 30
+            elif tweet_count < 5:
+                profile_confidence += 20
+            
+            # z-score heuristics
+            if z_score > 5:
+                profile_confidence += 50
+            elif z_score > 3:
+                profile_confidence += 25
+            elif z_score > 2:
+                profile_confidence += 10
+            
+            # username analysis
+            num_count = sum(c.isdigit() for c in username)
+            if "bot" in username:
+                profile_confidence += 50  # increased bonus
+            elif num_count >= 4:
+                profile_confidence += 30
+            elif any(char in username for char in "_-.") and num_count >= 2:
+                profile_confidence += 20
+            
+            # profile completeness
+            if not description:
+                profile_confidence += 20
+            if not location:
+                profile_confidence += 10
+            
+            # description spam/generic keyword heuristics
+            spam_keywords = ["click here", "follow me", "free money", "crypto", "giveaway", "discount", "xxx", "adult", "onlyfans", "breaking news"]
+            if any(spam_kw in description.lower() for spam_kw in spam_keywords):
+                profile_confidence += 40
+            generic_phrases = ["manifesting", "positive vibes", "grateful", "dream big", "hustle", "motivation"]
+            if any(phrase in description.lower() for phrase in generic_phrases):
+                profile_confidence += 20
+            
+            # -- FINAL COMBINATION USING WEIGHTED RMS --
+            final_confidence = math.sqrt(
+                (self.content_weight * (final_content_confidence ** 2) + self.profile_weight * (profile_confidence ** 2))
+                / (self.content_weight + self.profile_weight)
+            )
+
+            is_bot = final_confidence >= 50
+
+            # print("RESULT = user: " + username + " is_bot: " + str(is_bot))
+            
+            marked_account.append(DetectionMark(user_id=user_id, confidence=int(final_confidence), bot=is_bot))
+            
+        return marked_account
+
+"""
+first contest code:
+
+        marked_account = []
+        
+        for user in session_data.users:
+            user_id = user["id"]  
+            username = user["username"]
+
+            confidence = 0
+            is_bot = False
+            
+            if "bot" in username.lower():
+                confidence = 100  # full confidence its a bot
+                is_bot = True
+
+            marked_account.append(DetectionMark(user_id=user_id, confidence=confidence, bot=is_bot))
+
+        return marked_account
+
+"""
+
+"""
+second competition code:
+
+def detect_bot(self, session_data):
         # todo logic
         # Example: trying basic logic heuristics 
         marked_account = []
@@ -71,26 +278,4 @@ class Detector(ADetector):
             marked_account.append(DetectionMark(user_id=user_id, confidence=confidence, bot=is_bot))
 
         return marked_account
-
-
-"""
-first contest code:
-
-        marked_account = []
-        
-        for user in session_data.users:
-            user_id = user["id"]  
-            username = user["username"]
-
-            confidence = 0
-            is_bot = False
-            
-            if "bot" in username.lower():
-                confidence = 100  # full confidence its a bot
-                is_bot = True
-
-            marked_account.append(DetectionMark(user_id=user_id, confidence=confidence, bot=is_bot))
-
-        return marked_account
-
 """

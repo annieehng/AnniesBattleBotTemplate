@@ -13,10 +13,14 @@ import json
 # Competition Environment Variables
 session_id = int(os.getenv('SESSION_ID'))
 code_max_time = int(os.getenv('MAX_TIME'))
+openai_api_key = os.getenv("env_var1")
+# in registration, put the api key in the string value
 
 # Testing Environment Variables
-# session_id = 2
+# session_id = 3
 # code_max_time = 3601 
+# openai_api_key = ""
+
 
 logging.basicConfig(
     filename='run.log',
@@ -42,7 +46,7 @@ def handler(signum, frame):
 
 logging.info(f"START SESSION {session_id}")
 try:
-    detector = Detector()
+    detector = Detector(openai_api_key=openai_api_key)
     # ask for Session Info
     get_session_response, session_dataset = get_session_data()
 
@@ -54,7 +58,7 @@ try:
 
     logging.info(f"Get Session response status code: {get_session_response.status_code}")
     print("Get Session response status code:", get_session_response.status_code)
-    #print("Get Session response content:", session_dataset.json())
+    # print("Get Session response content:", json.dumps(session_dataset.__dict__, indent=4))
 
     signal.signal(signal.SIGALRM, handler)
     signal.alarm(code_max_time)
@@ -88,7 +92,7 @@ try:
     # Print the response
     logging.info(f"Detection Submission repsonse status code: {submission_confirmation.status_code}")
     print("Detection Submission repsonse status code:", submission_confirmation.status_code)
-    #print("Detection Submission response content:", json.dumps(submission_confirmation.json(), indent=4))
+    # print("Detection Submission response content:", json.dumps(submission_confirmation.json(), indent=4))
 
     signal.alarm(0)
     logging.info(f"END SESSION {session_id}")
