@@ -1,5 +1,7 @@
 FROM python:3.8
 
+RUN apt-get update && apt-get install -y default-jdk
+
 RUN pip install --upgrade pip
 RUN pip install requests
 RUN pip install pydantic
