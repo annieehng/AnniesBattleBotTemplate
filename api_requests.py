@@ -9,9 +9,9 @@ session_id = os.getenv('SESSION_ID')
 
 
 # Testing Environment Variables
-# base_url = 'http://3.92.68.65:3000/api/test/3' 
-# authentication_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0ZWFtSWQiOiIxOSIsInRlYW1OYW1lIjoiYW5uaWVkZXRlY3RvcjEiLCJpYXQiOjE3Mzk0NjM2MjgsImV4cCI6MTczOTU1MDAyOH0.3EgZizsBZjHAibUxgGvOVFc_wkB2iWChOG9ClHCScKs" 
-# session_id = 3
+# base_url = 'http://3.92.68.65:3000/api/test/4' 
+# authentication_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0ZWFtSWQiOiIxOSIsInRlYW1OYW1lIjoiYW5uaWVkZXRlY3RvcjEiLCJpYXQiOjE3NDAwNjM2NjAsImV4cCI6MTc0MDE1MDA2MH0.C28Kd4o03AUPgIoc2bLidCEmtVrL6IDEMhGDf1s4-Xg" 
+# session_id = 4
 
 header = {'Authorization': 'bearer ' + authentication_token, 'Content-Type': 'application/json'}
 
@@ -59,7 +59,7 @@ def get_sub_session(sub_session):
         return response, SubSessionDataset(response.json())
     
 def submit_injection(sub_session, posts_submission, users_submission):
-    print(json.dumps({"posts": posts_submission, "users": users_submission}, indent=4))
+    # print(json.dumps({"posts": posts_submission, "users": users_submission}, indent=4))
     return requests.post(base_url + '/bot/session/' + str(session_id) + '/' + str(sub_session), headers=header, data=json.dumps({"posts": posts_submission, "users": users_submission}))
 
 # DETECTOR SECTION
@@ -74,7 +74,7 @@ class SessionDataset:
 def get_session_data():
     response = requests.get(base_url + '/detector/session/' + str(session_id), headers=header)
 
-    # print("DEBUG: response status = ", response.status_code)
+    # ("DEBUG: response status = ", response.status_code)
 
     if response.status_code >= 400:
         # print("DEBUG: Error in response, returning empty list.")
@@ -86,6 +86,6 @@ def get_session_data():
         # print("DEBUG: Type of session_dataset.users =", type(session_dataset.users))
 
         return response, SessionDataset(response.json())
-    
+
 def submit_detection(detections_submission):
     return requests.post(base_url + '/detector/session/' + str(session_id), headers=header, data=json.dumps({"users": detections_submission}))

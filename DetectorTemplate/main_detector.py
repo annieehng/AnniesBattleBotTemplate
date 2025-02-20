@@ -10,17 +10,23 @@ from teams_classes import DetectionMark
 from api_requests import get_session_data, submit_detection
 import json
 
-# Competition Environment Variables
+# Competition Environment Variables (normally set via env variables)
 session_id = int(os.getenv('SESSION_ID'))
 code_max_time = int(os.getenv('MAX_TIME'))
 openai_api_key = os.getenv("env_var1")
 # in registration, put the api key in the string value
 
 # Testing Environment Variables
-# session_id = 3
+# session_id = 4
 # code_max_time = 3601 
-# openai_api_key = ""
+# open_ai_key = ""
 
+# print("session_id:", session_id)
+# print("Current working directory:", os.getcwd())
+
+# remove any existing logging handlers to force a fresh configuration
+for handler in logging.root.handlers[:]:
+    logging.root.removeHandler(handler)
 
 logging.basicConfig(
     filename='run.log',
@@ -45,11 +51,11 @@ def handler(signum, frame):
     raise TimeoutError("Timeout Error:")
 
 logging.info(f"START SESSION {session_id}")
+
 try:
     detector = Detector(openai_api_key=openai_api_key)
-    # ask for Session Info
     get_session_response, session_dataset = get_session_data()
-
+    
     all_id_set = set()
     for user in session_dataset.users:
         all_id_set.add(user['id'])
@@ -64,36 +70,33 @@ try:
     signal.alarm(code_max_time)
     try:
         marked_account = detector.detect_bot(session_dataset)
-        if not isinstance(marked_account[0], DetectionMark): # If the teams don't return a list of DetectionMark instance/object.
-            raise TypeError(f"The elements of the list should be DetectionMark instance not {type(marked_account[0])}. Make sure to return a list[DetectionMark].")
+        if not isinstance(marked_account[0], DetectionMark):  # Check each element is a DetectionMark
+            raise TypeError(f"Expected DetectionMark instance, got {type(marked_account[0])}.")
         
         marked_id_set = set()
         for account in marked_account:
             marked_id_set.add(account.user_id)
-
-        if len(marked_account) == 0: # Empty submission
+        
+        if len(marked_account) == 0:  # Empty submission
             detections_submission = []
         elif not len(marked_account) == len(marked_id_set):
-            raise MultipleDetectionForUser("Every user need to have one DetectionMark only. At least one user have more then 1 DetectionMark.")
+            raise MultipleDetectionForUser("Every user must have exactly one DetectionMark.")
         elif not all_id_set == marked_id_set:
-            raise MarkingMissingUsers("Your submission is not giving a results for every users of the dataset. Make sure to make a DetectionMark for every user.")
+            raise MarkingMissingUsers("DetectionMark missing for some users.")
         else:
             detections_submission = [user.to_dict() for user in marked_account]
     except TimeoutError as exc:
-        logging.error(f"{exc} The code took more than one hour to run. Continue with an empty submission.")
-        print(f"{exc} The code took more than one hour to run. Continue with an empty submission.")
+        logging.error(f"{exc} Code took more than one hour. Proceeding with empty submission.")
+        print(f"{exc} Code took more than one hour. Proceeding with empty submission.")
         detections_submission = []
 
-    submission_confirmation = submit_detection(detections_submission) 
+    submission_confirmation = submit_detection(detections_submission)
     
-    # Check if the request was successful
     submission_confirmation.raise_for_status()
     
-    # Print the response
-    logging.info(f"Detection Submission repsonse status code: {submission_confirmation.status_code}")
-    print("Detection Submission repsonse status code:", submission_confirmation.status_code)
-    # print("Detection Submission response content:", json.dumps(submission_confirmation.json(), indent=4))
-
+    logging.info(f"Detection Submission response status code: {submission_confirmation.status_code}")
+    print("Detection Submission response status code:", submission_confirmation.status_code)
+    
     signal.alarm(0)
     logging.info(f"END SESSION {session_id}")
 
@@ -103,11 +106,25 @@ except (requests.exceptions.RequestException, ValidationError, TypeError, Markin
         print("An error occurred:", exc)
     elif isinstance(exc, ValidationError):
         if exc.errors()[0]['type'] == 'int_from_float':
-            logging.error(f"DetectionMark Object Error: The confidence should be an int between 0 (definitely not a bot) and 100 (definitely a bot). Error Description {exc.errors()}.")
-            print(f"DetectionMark Object Error: The confidence should be an int between 0 (definitely not a bot) and 100 (definitely a bot). Error Description {exc.errors()}.")
+            logging.error(f"DetectionMark Object Error: Confidence should be an int between 0 and 100. Error: {exc.errors()}.")
+            print(f"DetectionMark Object Error: Confidence should be an int between 0 and 100. Error: {exc.errors()}.")
         else:
-            logging.error(f"DetectionMark Object Error: Error Description {exc.errors()}. Make sure you create your instance correctly.")
-            print(f"DetectionMark Object Error: Error Description {exc.errors()}. Make sure you create your instance correctly.")
+            logging.error(f"DetectionMark Object Error: {exc.errors()}.")
+            print(f"DetectionMark Object Error: {exc.errors()}.")
     elif isinstance(exc, (TypeError, MarkingMissingUsers, MultipleDetectionForUser)):
         logging.error(exc)
         print(exc)
+
+# At the very end, flush and shutdown logging, then print the log file content for verification.
+for handler in logging.getLogger().handlers:
+    handler.flush()
+logging.shutdown()
+
+"""
+try:
+    with open("run.log", "r") as f:
+        print("Contents of run.log:")
+        print(f.read())
+except Exception as e:
+    print("Error reading run.log:", e)
+"""
