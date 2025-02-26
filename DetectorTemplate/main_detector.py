@@ -9,20 +9,23 @@ from pydantic import ValidationError
 from teams_classes import DetectionMark
 from api_requests import get_session_data, submit_detection
 import json
+import openai
 
 # Competition Environment Variables (normally set via env variables)
-session_id = int(os.getenv('SESSION_ID'))
-code_max_time = int(os.getenv('MAX_TIME'))
-openai_api_key = os.getenv("env_var1")
+# session_id = int(os.getenv('SESSION_ID'))
+# code_max_time = int(os.getenv('MAX_TIME'))
+# openai_api_key = os.getenv("env_var1")
 # in registration, put the api key in the string value
 
 # Testing Environment Variables
-# session_id = 4
-# code_max_time = 3601 
-# open_ai_key = ""
+session_id = 5
+code_max_time = 3601 
+openai_api_key = ""
 
 # print("session_id:", session_id)
 # print("Current working directory:", os.getcwd())
+
+openai.log = "warning"  # or "error"
 
 # remove any existing logging handlers to force a fresh configuration
 for handler in logging.root.handlers[:]:
@@ -34,6 +37,14 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
+
+class IgnoreHTTPRequestFilter(logging.Filter):
+    def filter(self, record):
+        return "HTTP Request:" not in record.getMessage()
+
+root_logger = logging.getLogger()
+for handler in root_logger.handlers:
+    handler.addFilter(IgnoreHTTPRequestFilter())
 
 class TimeoutError(Exception):
     """Custom exception for timeout errors."""
