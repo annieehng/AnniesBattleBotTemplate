@@ -12,15 +12,15 @@ import json
 import openai
 
 # Competition Environment Variables (normally set via env variables)
-# session_id = int(os.getenv('SESSION_ID'))
-# code_max_time = int(os.getenv('MAX_TIME'))
-# openai_api_key = os.getenv("env_var1")
+session_id = int(os.getenv('SESSION_ID'))
+code_max_time = int(os.getenv('MAX_TIME'))
+openai_api_key = os.getenv("env_var1")
 # in registration, put the api key in the string value
 
 # Testing Environment Variables
-session_id = 5
-code_max_time = 3601 
-openai_api_key = ""
+# session_id = 5
+# code_max_time = 3601 
+# openai_api_key = ""
 
 # print("session_id:", session_id)
 # print("Current working directory:", os.getcwd())
