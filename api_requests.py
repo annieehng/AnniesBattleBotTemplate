@@ -6,14 +6,19 @@ import json
 base_url = os.getenv('BASE_URL')
 authentication_token = os.getenv('AUTH_TOKEN')
 session_id = os.getenv('SESSION_ID')
+header = {'Authorization': 'bearer ' + authentication_token, 'Content-Type': 'application/json'}
 
 
 # Testing Environment Variables
-# base_url = 'http://3.92.68.65:3000/api/test/5' 
-# authentication_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0ZWFtSWQiOiIxOSIsInRlYW1OYW1lIjoiYW5uaWVkZXRlY3RvcjEiLCJpYXQiOjE3NDA3MDAwMDQsImV4cCI6MTc0MDc4NjQwNH0.Wc4agB1h2fA4A_hdZDd4XeHJsGZfbLJJb8zVe10L2Xs" 
-# session_id = 5
-
-header = {'Authorization': 'bearer ' + authentication_token, 'Content-Type': 'application/json'}
+# base_url = 'http://3.92.68.65:3000/api/test/6'
+# try:
+#     authentication_token = requests.post('http://3.92.68.65:3000/api/auth/login', headers={'Content-Type': 'application/json'}, data=json.dumps({"team_name": "", "team_password": ""}))
+#     authentication_token.raise_for_status()
+# except(requests.exceptions.RequestException) as error:
+#     error_details = error.response.json()
+#     print(f"An error occurred: {error}. Error Message: {error_details.get('message', 'No message available')}")
+# session_id = 6
+# header = {'Authorization': 'bearer ' + authentication_token.text, 'Content-Type': 'application/json'}
 
 #BOT SECTION
 class SessionInfo:
