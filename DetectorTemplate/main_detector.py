@@ -14,7 +14,7 @@ import openai
 # Competition Environment Variables (normally set via env variables)
 session_id = int(os.getenv('SESSION_ID'))
 code_max_time = int(os.getenv('MAX_TIME'))
-openai_api_key = os.getenv("env_var1")
+openai_api_key = os.getenv("ENV_VAR1")
 # in registration, put the api key in the string value
 
 print(f"DEBUG: env_var1 = {openai_api_key}")
