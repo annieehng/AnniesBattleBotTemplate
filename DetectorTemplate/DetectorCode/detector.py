@@ -167,7 +167,7 @@ class Detector(ADetector):
                 temperature=0.0
             )
             rating_str = response.choices[0].message.content.strip()
-            print("OpenAI response:", rating_str)
+            # print("OpenAI response:", rating_str)
             return float(rating_str)
         except Exception as e:
             print("OpenAI query failed:", str(e))
@@ -200,7 +200,7 @@ class Detector(ADetector):
                 print(f"OpenAI query returned non-numeric value for user {user_id}: {openai_raw}")
                 openai_score = 0
 
-            print(f"OpenAI answer for user {user_id}: {openai_score}")
+            # print(f"OpenAI answer for user {user_id}: {openai_score}")
 
             lex_diversity = self.compute_lexical_diversity(texts)
             diversity_bonus = 20 if lex_diversity < 0.4 else 0
