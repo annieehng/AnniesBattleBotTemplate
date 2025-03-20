@@ -1,14 +1,15 @@
-from abc_classes import ADetector
-from teams_classes import DetectionMark
+import datetime
+import math
 import random
-from openai import OpenAI
 
 import language_tool_python
 import numpy as np
+from openai import OpenAI
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+from teams_classes import DetectionMark
 from transformers import pipeline
-import math
+from abc_classes import ADetector
 
 
 class Detector(ADetector):
@@ -19,23 +20,25 @@ class Detector(ADetector):
         similarity_weight=0.3,
         sentiment_weight=0.2,
         grammar_weight=0.2,
-        openai_weight=0.3,
+        openai_weight=0.15,  
+        timeseries_weight=0.1,  # new weight for time-series signal
         # additional scaling factors for content and profile signals
         content_scale=1.2,
-        profile_scale=1.3,
+        profile_scale=1.1,  # slightly reduced profile influence
         # weights for final combination: content vs. profile signals
         content_weight=0.6,
         profile_weight=0.4,
         # grammar error threshold for scoring
         grammar_error_threshold=0.01,
-        # classification threshold (tune this to reduce false positives)
-        classification_threshold=60  # increased from 50
+        # classification threshold (lowered to reduce false positives)
+        classification_threshold=45  
     ):
         self.openai_api_key = openai_api_key
         self.similarity_weight = similarity_weight
         self.sentiment_weight = sentiment_weight
         self.grammar_weight = grammar_weight
         self.openai_weight = openai_weight
+        self.timeseries_weight = timeseries_weight
         self.content_scale = content_scale
         self.profile_scale = profile_scale
         self.content_weight = content_weight
@@ -67,6 +70,7 @@ class Detector(ADetector):
         for text in texts:
             try:
                 result = self.sentiment_analyzer(text)[0]
+                # treat 'neutral' as 0; otherwise, use the confidence score
                 scores.append(0 if result['label'].lower() == 'neutral' else result['score'])
             except Exception:
                 scores.append(0)
@@ -90,17 +94,56 @@ class Detector(ADetector):
             ratios.append(ratio)
         return np.mean(ratios) if ratios else 0
 
+    def compute_timeseries_score(self, posts):
+        """
+        Compute a score based on the regularity (burstiness) of posting
+        If a user posts many messages with very similar intervals (i.e. low coefficient of variation), that is more suspicious.
+        
+        Returns a score from 0 to 100.
+        """
+        if len(posts) < 2:
+            return 0
+        times = []
+        for post in posts:
+            created_at = post.get("created_at")
+            if created_at:
+                try:
+                    dt = datetime.datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                    times.append(dt)
+                except Exception:
+                    continue
+        if len(times) < 2:
+            return 0
+        times.sort()
+        # calculate the intervals (in seconds) between consecutive posts
+        intervals = [(times[i+1] - times[i]).total_seconds() for i in range(len(times)-1)]
+        if not intervals:
+            return 0
+        mean_interval = np.mean(intervals)
+        std_interval = np.std(intervals)
+        cv = std_interval / mean_interval if mean_interval > 0 else 0
+        # if the user has many posts and the variability (CV) is low,
+        # return a higher score (indicating more suspicious, spam behavior)
+        num_posts = len(times)
+        if num_posts >= 10 and cv < 0.2:
+            return min(100, 100 * (0.2 - cv) / 0.2)
+        else:
+            return 0
+
     def query_openai(self, text):
         messages = [
             {
                 "role": "system",
                 "content": (
                     "You are an expert in detecting subtle signs of automated social media content. "
-                    "In a competitive setting, human posts are naturally varied, while even sophisticated bots tend to produce text with overly consistent phrasing, minimal personalization, and subtle repetition. "
-                    "Based solely on the text content, return a single integer rating from 0 to 100 using this scale: "
-                    "0-30: very human-like; 31-60: possibly mildly automated; 61-100: highly likely bot-generated. "
-                    "Be conservative: if the text seems natural, output a low number. Do not include any commentary—only the number.\n\n"
-                    "For example:\n"
+                    "In a competitive setting, human tweets are naturally varied, even if short, whereas bot-generated tweets "
+                    "tend to show overly consistent phrasing, minimal personalization, and repetition. "
+                    "Based solely on the text content, return a single integer rating from 0 to 100, where:\n"
+                    "  0-30: Very human-like\n"
+                    "  31-60: Possibly mildly automated\n"
+                    "  61-100: Highly likely bot-generated\n"
+                    "If the text seems natural and varied, output a low number. Do not include any commentary—only the number.\n\n"
+                    "Examples:\n"
                     "Text: 'I had a wonderful morning walking in the park with my dog.' -> Answer: 15\n"
                     "Text: 'Had my coffee. Ready for the game. Looking forward to the day.' -> Answer: 25\n"
                     "Text: 'Had my coffee. Had my coffee. Had my coffee.' -> Answer: 90\n\n"
@@ -114,31 +157,34 @@ class Detector(ADetector):
         ]
         try:
             client = OpenAI(api_key=self.openai_api_key)
-            response = client.chat.completions.create(model="gpt-3.5-turbo",
+            response = client.chat.completions.create(
+                model="gpt-3.5-turbo",
                 messages=messages,
                 max_tokens=5,
                 temperature=0.0
             )
             rating_str = response.choices[0].message.content.strip()
+            print("OpenAI response:", rating_str)
             return float(rating_str)
-
         except Exception as e:
             print("OpenAI query failed:", str(e))
             return 0
 
     def detect_bot(self, session_data):
-        # Group posts by user id.
+        # group posts by user id - store the full post dictionaries
         user_posts = {}
         for post in session_data.posts:
             author_id = post.get("author_id")
             if author_id not in user_posts:
                 user_posts[author_id] = []
-            user_posts[author_id].append(post.get("text", ""))
+            user_posts[author_id].append(post)  # store the full post (text, created_at, etc)
 
         marked_accounts = []
         for user in session_data.users:
             user_id = user["id"]
-            texts = user_posts.get(user_id, [])
+            posts = user_posts.get(user_id, [])
+            # extract texts for content analysis
+            texts = [p.get("text", "") for p in posts]
 
             sim_score = self.compute_similarity_score(texts) * 100
             sentiment_score = self.compute_sentiment_score(texts) * 100
@@ -157,15 +203,20 @@ class Detector(ADetector):
             lex_diversity = self.compute_lexical_diversity(texts)
             diversity_bonus = 20 if lex_diversity < 0.4 else 0
 
+            timeseries_score = self.compute_timeseries_score(posts)
+
+            # combine the content signals (weighted sum approach)
             final_content_confidence = (
                 self.similarity_weight * sim_score +
                 self.sentiment_weight * sentiment_score +
                 self.grammar_weight * avg_grammar_score +
                 self.openai_weight * openai_score +
-                diversity_bonus
+                diversity_bonus +
+                self.timeseries_weight * timeseries_score
             )
             final_content_confidence *= self.content_scale
 
+            # profile-based signals
             profile_confidence = 0
             tweet_count = user.get("tweet_count", 0)
             z_score = user.get("z_score", 0)
@@ -211,14 +262,12 @@ class Detector(ADetector):
 
             profile_confidence *= self.profile_scale
 
-            final_confidence = math.sqrt(
-                (self.content_weight * (final_content_confidence ** 2) + self.profile_weight * (profile_confidence ** 2))
-                / (self.content_weight + self.profile_weight)
-            )
+            # content and profile signals using a weighted average.
+            final_confidence = ((self.content_weight * final_content_confidence) + (self.profile_weight * profile_confidence)) / (self.content_weight + self.profile_weight)
 
             is_bot = final_confidence >= self.classification_threshold
 
-            print("RESULT = user: " + username + " answer: " + str(is_bot))
+            print("RESULT = user: " + username + " is_bot: " + str(is_bot))
 
             marked_accounts.append(DetectionMark(user_id=user_id, confidence=int(final_confidence), bot=is_bot))
 

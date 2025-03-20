@@ -17,11 +17,11 @@ code_max_time = int(os.getenv('MAX_TIME'))
 openai_api_key = os.getenv("ENV_VAR1")
 # in registration, put the api key in the string value
 
-print(f"DEBUG: env_var1 = {openai_api_key}")
+# print(f"DEBUG: env_var1 = {openai_api_key}")
 
 
 # Testing Environment Variables
-# session_id = 6
+# session_id = 7
 # code_max_time = 3601 
 # openai_api_key = ""
 
