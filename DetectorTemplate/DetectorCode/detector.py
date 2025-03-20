@@ -164,7 +164,7 @@ class Detector(ADetector):
                 temperature=0.0
             )
             rating_str = response.choices[0].message.content.strip()
-            print("OpenAI response:", rating_str)
+            # print("OpenAI response:", rating_str)
             return float(rating_str)
         except Exception as e:
             print("OpenAI query failed:", str(e))
@@ -198,7 +198,7 @@ class Detector(ADetector):
                 print(f"OpenAI query returned non-numeric value for user {user_id}: {openai_raw}")
                 openai_score = 0
 
-            print(f"OpenAI answer for user {user_id}: {openai_score}")
+            # print(f"OpenAI answer for user {user_id}: {openai_score}")
 
             lex_diversity = self.compute_lexical_diversity(texts)
             diversity_bonus = 20 if lex_diversity < 0.4 else 0
@@ -265,9 +265,11 @@ class Detector(ADetector):
             # content and profile signals using a weighted average.
             final_confidence = ((self.content_weight * final_content_confidence) + (self.profile_weight * profile_confidence)) / (self.content_weight + self.profile_weight)
 
-            is_bot = final_confidence >= self.classification_threshold
+            is_bot = final_confidence >= self.classification_threshold 
 
-            print("RESULT = user: " + username + " is_bot: " + str(is_bot))
+            # print(f"final confidence score = user: {username} score: {final_confidence}")
+
+            # print("RESULT = user: " + username + " is_bot: " + str(is_bot))
 
             marked_accounts.append(DetectionMark(user_id=user_id, confidence=int(final_confidence), bot=is_bot))
 
