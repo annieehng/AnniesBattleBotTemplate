@@ -176,6 +176,7 @@ class Detector(ADetector):
     def detect_bot(self, session_data):
         # group posts by author; keep the full post for time info.
         user_posts = {}
+
         for post in session_data.posts:
             author_id = post.get("author_id")
             if author_id not in user_posts:
