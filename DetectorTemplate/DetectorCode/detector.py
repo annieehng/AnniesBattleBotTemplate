@@ -20,8 +20,8 @@ class Detector(ADetector):
         similarity_weight=0.3,
         sentiment_weight=0.2,
         grammar_weight=0.2,
-        openai_weight=0.15,  
-        timeseries_weight=0.1,  # new weight for time-series signal
+        openai_weight=0.25,  # increased from 0.15 to 0.25 for higher influence
+        timeseries_weight=0.1,  # weight for time-series signal
         # additional scaling factors for content and profile signals
         content_scale=1.2,
         profile_scale=1.1,  # slightly reduced profile influence
@@ -96,7 +96,7 @@ class Detector(ADetector):
 
     def compute_timeseries_score(self, posts):
         """
-        Compute a score based on the regularity (burstiness) of posting
+        Compute a score based on the regularity (burstiness) of posting.
         If a user posts many messages with very similar intervals (i.e. low coefficient of variation), that is more suspicious.
         
         Returns a score from 0 to 100.
@@ -115,15 +115,12 @@ class Detector(ADetector):
         if len(times) < 2:
             return 0
         times.sort()
-        # calculate the intervals (in seconds) between consecutive posts
         intervals = [(times[i+1] - times[i]).total_seconds() for i in range(len(times)-1)]
         if not intervals:
             return 0
         mean_interval = np.mean(intervals)
         std_interval = np.std(intervals)
         cv = std_interval / mean_interval if mean_interval > 0 else 0
-        # if the user has many posts and the variability (CV) is low,
-        # return a higher score (indicating more suspicious, spam behavior)
         num_posts = len(times)
         if num_posts >= 10 and cv < 0.2:
             return min(100, 100 * (0.2 - cv) / 0.2)
@@ -136,18 +133,23 @@ class Detector(ADetector):
                 "role": "system",
                 "content": (
                     "You are an expert in detecting subtle signs of automated social media content. "
-                    "In a competitive setting, human tweets are naturally varied, even if short, whereas bot-generated tweets "
-                    "tend to show overly consistent phrasing, minimal personalization, and repetition. "
-                    "Based solely on the text content, return a single integer rating from 0 to 100, where:\n"
-                    "  0-30: Very human-like\n"
+                    "Based on the following guidelines, rate the text on a scale from 0 to 100, where:\n"
+                    "  0-30: Very human-like – posts are casual, Gen Z style, typically all lower-case, informal, and rarely use hashtags\n"
                     "  31-60: Possibly mildly automated\n"
-                    "  61-100: Highly likely bot-generated\n"
-                    "If the text seems natural and varied, output a low number. Do not include any commentary—only the number.\n\n"
-                    "Examples:\n"
-                    "Text: 'I had a wonderful morning walking in the park with my dog.' -> Answer: 15\n"
-                    "Text: 'Had my coffee. Ready for the game. Looking forward to the day.' -> Answer: 25\n"
-                    "Text: 'Had my coffee. Had my coffee. Had my coffee.' -> Answer: 90\n\n"
-                    "Now, evaluate the following text and return only the number:"
+                    "  61-100: Highly likely bot-generated – posts are more formal, follow proper capitalization, structured grammar, and frequently include hashtags\n\n"
+                    "Examples from our datasets:\n\n"
+                    "Example 1 (Human - Gen Z style):\n"
+                    "   'what movie should i watch tn (reason why i wanna watch it)\n"
+                    "    you can submit others in comments'\n"
+                    "   -> Answer: 15\n\n"
+                    "Example 2 (Bot - Millennial style):\n"
+                    "   'Tar Heels forever! Born a Tar Heel, sty a Tar Heel, can’t shake off the pride! #GoHeels'\n"
+                    "   -> Answer: 75\n\n"
+                    "Example 3 (Bot - Cheesy, overly formal style):\n"
+                    "   'Found a hilarious note on my door this morning. Fun fact: My neighbors apparently have a PhD in passive aggression. 😄 Might start leaving them thank you notes for the laughs. #JustNeighborThings'\n"
+                    "   -> Answer: 80\n\n"
+                    "Note: Hashtags and emojis are uncommon in genuine human posts nowadays, but bot posts tend to include them for emphasis or promotional reasons.\n\n"
+                    "Now, evaluate the following text and return only the number (do not include any additional commentary):"
                 )
             },
             {
@@ -158,54 +160,110 @@ class Detector(ADetector):
         try:
             client = OpenAI(api_key=self.openai_api_key)
             response = client.chat.completions.create(
-                model="gpt-3.5-turbo",
+                model="gpt-4",  # Consider switching to ChatGPT o3-mini-high for a lightweight alternative
                 messages=messages,
                 max_tokens=5,
                 temperature=0.0
             )
             rating_str = response.choices[0].message.content.strip()
-            # print("OpenAI response:", rating_str)
             return float(rating_str)
         except Exception as e:
             print("OpenAI query failed:", str(e))
             return 0
 
+    def query_openai_profile(self, profile):
+        # Build a structured string that includes all profile data
+        profile_info = (
+            f"Tweet Count: {profile.get('tweet_count', 'N/A')}\n"
+            f"Z-Score: {profile.get('z_score', 'N/A')}\n"
+            f"Username: {profile.get('username', 'N/A')}\n"
+            f"Name: {profile.get('name', 'N/A')}\n"
+            f"Description: {profile.get('description', 'N/A')}\n"
+            f"Location: {profile.get('location', 'N/A')}\n"
+        )
+        
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are an expert in detecting subtle signs of automated social media profile data. "
+                    "Based on the following guidelines, rate the profile on a scale from 0 to 100, where:\n"
+                    "  0-30: Very human-like – profiles typically have average or low tweet counts, casual and creative usernames, informal names, and descriptions that are written in a relaxed, Gen Z style (often all lower-case, with slang and little formal punctuation) with little or no use of hashtags.\n"
+                    "  61-100: Highly likely bot-generated – profiles often use full real names, display formal grammar, proper capitalization, full sentences, and include cheesy hashtags and polished language.\n\n"
+                    "Examples:\n\n"
+                    "Example 1 (Human):\n"
+                    "   Tweet Count: 22\n"
+                    "   Z-Score: -0.2142360868\n"
+                    "   Username: Coscorrodrift\n"
+                    "   Name: coscorrodrift (streaming on YT at 16:30CET)\n"
+                    "   Description: 'youtube video watcher, commenter and maker (100/100 vids)\n"
+                    "                 now streaming at 16:30CET/10:30EST on youtube\n"
+                    "                 hmu if you need help with youtube or writing for $'\n"
+                    "   Location: spiritually in SF\n"
+                    "   -> Answer: around 15\n\n"
+                    "Example 2 (Bot):\n"
+                    "   Tweet Count: 0\n"
+                    "   Z-Score: -1.2616125109\n"
+                    "   Username: UrbanWanderlust\n"
+                    "   Name: Maya Rivers\n"
+                    "   Description: 'Explorer of cityscapes and green spaces | Photography Enthusiast | Sharing local gems from around the world | NYC native | #TravelBlogger #UrbanAdventures'\n"
+                    "   Location: N/A\n"
+                    "   -> Answer: around 80\n\n"
+                    "Now, evaluate the following profile data and return only the number (do not include any commentary):\n\n"
+                    f"{profile_info}"
+                )
+            },
+            {
+                "role": "user",
+                "content": "Profile Evaluation:\n" + profile_info + "\nAnswer:"
+            }
+        ]
+        try:
+            client = OpenAI(api_key=self.openai_api_key)
+            response = client.chat.completions.create(
+                model="gpt-4",
+                messages=messages,
+                max_tokens=5,
+                temperature=0.0
+            )
+            rating_str = response.choices[0].message.content.strip()
+            return float(rating_str)
+        except Exception as e:
+            print("OpenAI profile query failed:", str(e))
+            return 0
+
     def detect_bot(self, session_data):
-        # group posts by user id - store the full post dictionaries
+        # Group posts by user id
         user_posts = {}
         for post in session_data.posts:
             author_id = post.get("author_id")
             if author_id not in user_posts:
                 user_posts[author_id] = []
-            user_posts[author_id].append(post)  # store the full post (text, created_at, etc)
+            user_posts[author_id].append(post)
 
         marked_accounts = []
         for user in session_data.users:
             user_id = user["id"]
             posts = user_posts.get(user_id, [])
-            # extract texts for content analysis
-            texts = [p.get("text", "") for p in posts]
+            # Extract texts for content analysis
+            texts = [p.get("text", "") for p in posts if p.get("text")]
 
             sim_score = self.compute_similarity_score(texts) * 100
             sentiment_score = self.compute_sentiment_score(texts) * 100
             grammar_scores = [self.compute_grammar_score(t) for t in texts]
             avg_grammar_score = np.mean(grammar_scores) if grammar_scores else 0
             openai_raw = self.query_openai(texts[0]) if texts else 0
-
             try:
                 openai_score = float(openai_raw)
             except Exception:
                 print(f"OpenAI query returned non-numeric value for user {user_id}: {openai_raw}")
                 openai_score = 0
 
-            # print(f"OpenAI answer for user {user_id}: {openai_score}")
-
             lex_diversity = self.compute_lexical_diversity(texts)
             diversity_bonus = 20 if lex_diversity < 0.4 else 0
-
             timeseries_score = self.compute_timeseries_score(posts)
 
-            # combine the content signals (weighted sum approach)
+            # Combine content signals
             final_content_confidence = (
                 self.similarity_weight * sim_score +
                 self.sentiment_weight * sentiment_score +
@@ -216,21 +274,20 @@ class Detector(ADetector):
             )
             final_content_confidence *= self.content_scale
 
-            # profile-based signals
+            # ------------------- PROFILE-BASED SIGNALS -------------------
             profile_confidence = 0
             tweet_count = user.get("tweet_count", 0)
             z_score = user.get("z_score", 0)
-            username = (user.get("username") or "").lower()
-            description = (user.get("description") or "").lower()
-            location = user.get("location", "")
+            username = (user.get("username") or "").strip()
+            name = (user.get("name") or "").strip()
+            description = (user.get("description") or "").strip()
+            location = (user.get("location") or "").strip()
 
-            if tweet_count > 5000:
-                profile_confidence += 50
-            elif tweet_count > 1000:
+            # Tweet count heuristic: extreme counts can indicate bots
+            if tweet_count > 400:
                 profile_confidence += 30
-            elif tweet_count < 5:
-                profile_confidence += 20
 
+            # Z-score heuristic: extreme z-scores indicate abnormal behavior
             if z_score > 5:
                 profile_confidence += 50
             elif z_score > 3:
@@ -238,41 +295,65 @@ class Detector(ADetector):
             elif z_score > 2:
                 profile_confidence += 10
 
-            num_count = sum(c.isdigit() for c in username)
-            if "bot" in username:
+            # Username and Name heuristics: check for proper capitalization and formatting
+            username_lower = username.lower()
+            if "bot" in username_lower:
                 profile_confidence += 50
-            elif username.isalnum():
-                profile_confidence += 40
-            elif num_count >= 4:
+            elif username.isalnum() and username != username_lower:
                 profile_confidence += 30
-            elif any(ch in username for ch in "_-.") and num_count >= 2:
+            else:
+                num_digits = sum(c.isdigit() for c in username)
+                if num_digits >= 4:
+                    profile_confidence += 30
+                elif any(ch in username for ch in "_-.") and num_digits >= 2:
+                    profile_confidence += 20
+
+            # Name: if the name is a full proper name (e.g., first and last), this can be a bot signal
+            if " " in name and name == name.title():
                 profile_confidence += 20
 
-            if not description.strip():
+            # Description analysis:
+            if not description:
                 profile_confidence += 20
+            else:
+                if "#" in description:
+                    profile_confidence += 30
+                if description.count(". ") >= 1:
+                    profile_confidence += 10
+                if description != description.lower():
+                    profile_confidence += 10
+                else:
+                    profile_confidence -= 10
+
+            # Location missing increases suspicion
             if not location:
                 profile_confidence += 10
 
-            spam_keywords = ["click here", "follow me", "free money", "crypto", "giveaway", "discount", "xxx", "adult", "onlyfans", "breaking news"]
-            if any(spam_kw in description for spam_kw in spam_keywords):
-                profile_confidence += 40
-            generic_phrases = ["manifesting", "positive vibes", "grateful", "dream big", "hustle", "motivation"]
-            if any(phrase in description for phrase in generic_phrases):
-                profile_confidence += 20
+            # Use AI evaluation on the full profile data (username, name, description, tweet_count, z_score, location)
+            profile_data = {
+                "tweet_count": tweet_count,
+                "z_score": z_score,
+                "username": username,
+                "name": name,
+                "description": description,
+                "location": location
+            }
+            profile_ai_score = self.query_openai_profile(profile_data)  # AI score for the full profile data
+            # Incorporate the AI score at 50% weight into the overall profile confidence (increased from 30%)
+            profile_confidence += 0.5 * profile_ai_score
 
             profile_confidence *= self.profile_scale
+            # ------------------------------------------------------------------
 
-            # content and profile signals using a weighted average.
+            # Combine content and profile signals using weighted average
             final_confidence = ((self.content_weight * final_content_confidence) + (self.profile_weight * profile_confidence)) / (self.content_weight + self.profile_weight)
+            is_bot = final_confidence >= self.classification_threshold
 
-            is_bot = final_confidence >= self.classification_threshold 
-
-            # print(f"final confidence score = user: {username} score: {final_confidence}")
-
-            # print("RESULT = user: " + username + " is_bot: " + str(is_bot))
+            # Debug print (optional)
+            # print(f"User {username}: Content Score={final_content_confidence:.2f}, Profile Score={profile_confidence:.2f}, Final Score={final_confidence:.2f}")
 
             marked_accounts.append(DetectionMark(user_id=user_id, confidence=int(final_confidence), bot=is_bot))
-
+            
         return marked_accounts
 
 """
