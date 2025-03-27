@@ -20,18 +20,18 @@ class Detector(ADetector):
         similarity_weight=0.3,
         sentiment_weight=0.2,
         grammar_weight=0.2,
-        openai_weight=0.15,  # reduced weight
-        timeseries_weight=0.1,  # new weight for time-series signal
-        # additional scaling factors for content and profile signals
+        openai_weight=0.25,  # increased from 0.15 to 0.25 for higher influence
+        timeseries_weight=0.1,  # weight for time-series signal
+        # scaling factors for content and profile signals
         content_scale=1.2,
         profile_scale=1.1,  # slightly reduced profile influence
-        # weights for final combination: content vs. profile signals
+        # final combination weights: content vs. profile signals
         content_weight=0.6,
         profile_weight=0.4,
-        # grammar error threshold for scoring
+        # grammar error threshold
         grammar_error_threshold=0.01,
         # classification threshold (lowered to reduce false positives)
-        classification_threshold=45  # lowered threshold
+        classification_threshold=45  
     ):
         self.openai_api_key = openai_api_key
         self.similarity_weight = similarity_weight
@@ -46,14 +46,11 @@ class Detector(ADetector):
         self.grammar_error_threshold = grammar_error_threshold
         self.classification_threshold = classification_threshold
 
-        # French sentiment analyzer using Allociné sentiment model
         self.sentiment_analyzer = pipeline(
             "sentiment-analysis",
-            model="tblard/tf-allocine-sentiment",
-            tokenizer="tblard/tf-allocine-sentiment"
+            model="cardiffnlp/twitter-roberta-base-sentiment"
         )
-        # French grammar tool
-        self.grammar_tool = language_tool_python.LanguageTool('fr')
+        self.grammar_tool = language_tool_python.LanguageTool('fr-FR')
 
     def compute_similarity_score(self, texts):
         if len(texts) < 2:
@@ -73,7 +70,7 @@ class Detector(ADetector):
         for text in texts:
             try:
                 result = self.sentiment_analyzer(text)[0]
-                # for Allociné model, treat 'neutral' as 0; otherwise, use the confidence
+                # treat 'neutral' as 0; otherwise, use the confidence score
                 scores.append(0 if result['label'].lower() == 'neutral' else result['score'])
             except Exception:
                 scores.append(0)
@@ -99,9 +96,8 @@ class Detector(ADetector):
 
     def compute_timeseries_score(self, posts):
         """
-        Compute a score based on the regularity (burstiness) of posts.
-        If an author posts many messages with very similar time intervals (low CV), it may be suspicious
-
+        Compute a score based on the regularity (burstiness) of posting.
+        If a user posts many messages with very similar intervals (low coefficient of variation), that is more suspicious.
         Returns a score from 0 to 100.
         """
         if len(posts) < 2:
@@ -111,7 +107,6 @@ class Detector(ADetector):
             created_at = post.get("created_at")
             if created_at:
                 try:
-                    # ISO 8601 format; adjust if necessary
                     dt = datetime.datetime.fromisoformat(created_at.replace("Z", "+00:00"))
                     times.append(dt)
                 except Exception:
@@ -126,31 +121,33 @@ class Detector(ADetector):
         std_interval = np.std(intervals)
         cv = std_interval / mean_interval if mean_interval > 0 else 0
         num_posts = len(times)
-        # if there are many posts and the time intervals are very similar, assign a high score
         if num_posts >= 10 and cv < 0.2:
             return min(100, 100 * (0.2 - cv) / 0.2)
         else:
             return 0
 
     def query_openai(self, text):
-        # french prompt for evaluating the likelihood of automation
         messages = [
             {
                 "role": "system",
                 "content": (
-                    "You are an expert in detecting subtle signs of automated social media content. "
-                    "In a competitive setting, human tweets are naturally varied, even if short, while bot-generated tweets "
-                    "tend to show overly consistent phrasing, minimal personalization, and repetition. "
-                    "Based solely on the text content, return a single integer rating from 0 to 100, where:\n"
-                    "  0-30: Very human-like\n"
-                    "  31-60: Possibly mildly automated\n"
-                    "  61-100: Highly likely bot-generated\n"
-                    "If the text seems natural and varied, output a low number. Do not include any commentary—only the number.\n\n"
-                    "Examples:\n"
-                    "Texte : 'J'ai passé une merveilleuse matinée à me promener dans le parc avec mon chien.' -> Réponse : 15\n"
-                    "Texte : 'Pris mon café. Prêt pour le match. Hâte d'y être.' -> Réponse : 25\n"
-                    "Texte : 'Pris mon café. Pris mon café. Pris mon café.' -> Réponse : 90\n\n"
-                    "Now, evaluate the following text and return only the number:"
+                    "Vous êtes un expert dans la détection des signes subtils de contenu automatisé sur les réseaux sociaux. "
+                    "Sur la base des directives suivantes, évaluez le texte sur une échelle de 0 à 100, où :\n"
+                    "  0-30 : Très humain – les publications sont décontractées, style Génération Z, généralement en minuscules, informelles et utilisent rarement des hashtags.\n"
+                    "  31-60 : Possiblement légèrement automatisé.\n"
+                    "  61-100 : Très probablement généré par un bot – les publications sont plus formelles, avec une capitalisation appropriée, une grammaire structurée et utilisent fréquemment des hashtags.\n\n"
+                    "Exemples (extraits de nos données) :\n\n"
+                    "Exemple 1 (Humain, style Gén Z) :\n"
+                    "   \"ko y'a rien à voir\"\n"
+                    "   -> Réponse : 15\n\n"
+                    "Exemple 2 (Bot, style formel) :\n"
+                    "   \"Les supporters de l'équipe FC Paris sont fiers de leur club ! #FCParis #Victoire\"\n"
+                    "   -> Réponse : 70\n\n"
+                    "Exemple 3 (Bot, très formel et verbeux) :\n"
+                    "   \"Découvrez nos offres exclusives pour une expérience client inégalée. Profitez dès maintenant de remises exceptionnelles. #OffreSpéciale\"\n"
+                    "   -> Réponse : 80\n\n"
+                    "Note : Les hashtags et emojis sont rares chez les utilisateurs authentiques.\n\n"
+                    "Évaluez le texte suivant et renvoyez uniquement le nombre (sans commentaire) :"
                 )
             },
             {
@@ -161,22 +158,79 @@ class Detector(ADetector):
         try:
             client = OpenAI(api_key=self.openai_api_key)
             response = client.chat.completions.create(
-                model="gpt-3.5-turbo",
+                model="gpt-4",  # Using GPT-4 for optimal language processing
                 messages=messages,
                 max_tokens=5,
                 temperature=0.0
             )
             rating_str = response.choices[0].message.content.strip()
-            # print("OpenAI response:", rating_str)
             return float(rating_str)
         except Exception as e:
             print("OpenAI query failed:", str(e))
             return 0
 
-    def detect_bot(self, session_data):
-        # group posts by author; keep the full post for time info.
-        user_posts = {}
+    def query_openai_profile(self, profile):
+        # Build a structured string that includes all profile data
+        profile_info = (
+            f"Tweet Count: {profile.get('tweet_count', 'N/A')}\n"
+            f"Z-Score: {profile.get('z_score', 'N/A')}\n"
+            f"Username: {profile.get('username', 'N/A')}\n"
+            f"Name: {profile.get('name', 'N/A')}\n"
+            f"Description: {profile.get('description', 'N/A')}\n"
+            f"Location: {profile.get('location', 'N/A')}\n"
+        )
+        
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Vous êtes un expert dans la détection des signes subtils dans les données de profil automatisé sur les réseaux sociaux. "
+                    "Sur la base des directives suivantes, évaluez le profil sur une échelle de 0 à 100, où :\n"
+                    "  0-30 : Très humain – les profils ont généralement un nombre moyen ou faible de tweets, des noms d'utilisateur créatifs et informels, et des descriptions rédigées dans un style décontracté (souvent en minuscules, avec du slang) sans utilisation excessive de hashtags.\n"
+                    "  61-100 : Très probablement généré par un bot – les profils utilisent souvent de vrais noms, affichent une grammaire formelle, une capitalisation correcte, des phrases complètes et incluent des hashtags trop travaillés.\n\n"
+                    "Exemples :\n\n"
+                    "Exemple 1 (Humain) :\n"
+                    "   Tweet Count: 25\n"
+                    "   Z-Score: -0.5\n"
+                    "   Username: jeSuisCool\n"
+                    "   Name: jeSuisCool\n"
+                    "   Description: \"passionné de musique, amateur de vidéos spontanées et de commentaires décontractés\"\n"
+                    "   Location: \"Paris\"\n"
+                    "   -> Réponse : environ 15\n\n"
+                    "Exemple 2 (Bot) :\n"
+                    "   Tweet Count: 0\n"
+                    "   Z-Score: -1.2\n"
+                    "   Username: Elite_Paris\n"
+                    "   Name: Elite Paris\n"
+                    "   Description: \"Expert en technologie et innovations, dédié à la qualité et à l'excellence. #Innovation #Tech\"\n"
+                    "   Location: \"Paris\"\n"
+                    "   -> Réponse : environ 80\n\n"
+                    "Évaluez les données de profil suivantes et renvoyez uniquement le nombre (sans commentaire) :\n\n"
+                    f"{profile_info}"
+                )
+            },
+            {
+                "role": "user",
+                "content": "Évaluation du profil :\n" + profile_info + "\nRéponse :"
+            }
+        ]
+        try:
+            client = OpenAI(api_key=self.openai_api_key)
+            response = client.chat.completions.create(
+                model="gpt-4",
+                messages=messages,
+                max_tokens=5,
+                temperature=0.0
+            )
+            rating_str = response.choices[0].message.content.strip()
+            return float(rating_str)
+        except Exception as e:
+            print("OpenAI profile query failed:", str(e))
+            return 0
 
+    def detect_bot(self, session_data):
+        # Group posts by author id
+        user_posts = {}
         for post in session_data.posts:
             author_id = post.get("author_id")
             if author_id not in user_posts:
@@ -187,53 +241,56 @@ class Detector(ADetector):
         for user in session_data.users:
             user_id = user["id"]
             posts = user_posts.get(user_id, [])
-            texts = [p.get("text", "") for p in posts]
+            # Extract texts for content analysis
+            texts = [p.get("text", "") for p in posts if p.get("text")]
 
             sim_score = self.compute_similarity_score(texts) * 100
             sentiment_score = self.compute_sentiment_score(texts) * 100
             grammar_scores = [self.compute_grammar_score(t) for t in texts]
             avg_grammar_score = np.mean(grammar_scores) if grammar_scores else 0
             openai_raw = self.query_openai(texts[0]) if texts else 0
-
             try:
                 openai_score = float(openai_raw)
             except Exception:
                 print(f"OpenAI query returned non-numeric value for user {user_id}: {openai_raw}")
                 openai_score = 0
 
-            # print(f"OpenAI answer for user {user_id}: {openai_score}")
-
             lex_diversity = self.compute_lexical_diversity(texts)
             diversity_bonus = 20 if lex_diversity < 0.4 else 0
-
             timeseries_score = self.compute_timeseries_score(posts)
 
-            # combine content signals using a weighted sum
+            # Add bonus if grammar score is very high (over 80)
+            if avg_grammar_score > 80:
+                grammar_bonus = (avg_grammar_score - 80) * 0.5
+            else:
+                grammar_bonus = 0
+
+            # Combine content signals
             final_content_confidence = (
                 self.similarity_weight * sim_score +
                 self.sentiment_weight * sentiment_score +
                 self.grammar_weight * avg_grammar_score +
                 self.openai_weight * openai_score +
                 diversity_bonus +
-                self.timeseries_weight * timeseries_score
+                self.timeseries_weight * timeseries_score +
+                grammar_bonus
             )
             final_content_confidence *= self.content_scale
 
-            # profile signals
+            # ------------------- PROFILE-BASED SIGNALS -------------------
             profile_confidence = 0
             tweet_count = user.get("tweet_count", 0)
             z_score = user.get("z_score", 0)
-            username = (user.get("username") or "").lower()
-            description = (user.get("description") or "").lower()
-            location = user.get("location", "")
+            username = (user.get("username") or "").strip()
+            name = (user.get("name") or "").strip()
+            description = (user.get("description") or "").strip()
+            location = (user.get("location") or "").strip()
 
-            if tweet_count > 5000:
-                profile_confidence += 50
-            elif tweet_count > 1000:
+            # Tweet count heuristic: extreme counts indicate bots
+            if tweet_count > 400:
                 profile_confidence += 30
-            elif tweet_count < 5:
-                profile_confidence += 20
 
+            # Z-score heuristic: extreme values indicate abnormal behavior
             if z_score > 5:
                 profile_confidence += 50
             elif z_score > 3:
@@ -241,38 +298,63 @@ class Detector(ADetector):
             elif z_score > 2:
                 profile_confidence += 10
 
-            num_count = sum(c.isdigit() for c in username)
-            if "bot" in username:
+            # Username and name heuristics: check capitalization and formatting
+            username_lower = username.lower()
+            if "bot" in username_lower:
                 profile_confidence += 50
-            elif username.isalnum():
-                profile_confidence += 40
-            elif num_count >= 4:
+            elif username.isalnum() and username != username_lower:
                 profile_confidence += 30
-            elif any(ch in username for ch in "_-.") and num_count >= 2:
+            else:
+                num_digits = sum(c.isdigit() for c in username)
+                if num_digits >= 4:
+                    profile_confidence += 30
+                elif any(ch in username for ch in "_-.") and num_digits >= 2:
+                    profile_confidence += 20
+
+            # Name: if the name is a proper full name, add signal
+            if " " in name and name == name.title():
                 profile_confidence += 20
 
-            if not description.strip():
+            # Description analysis
+            if not description:
                 profile_confidence += 20
+            else:
+                if "#" in description:
+                    profile_confidence += 30
+                if description.count(". ") >= 1:
+                    profile_confidence += 10
+                if description != description.lower():
+                    profile_confidence += 10
+                else:
+                    profile_confidence -= 10
+
+            # Missing location increases suspicion
             if not location:
                 profile_confidence += 10
 
-            # adjust spam and generic keyword heuristics to French terms
-            spam_keywords = ["cliquez ici", "suivez moi", "argent gratuit", "crypto", "cadeau", "réduction", "xxx", "adulte", "onlyfans", "dernières nouvelles"]
-            if any(spam_kw in description for spam_kw in spam_keywords):
-                profile_confidence += 40
-            generic_phrases = ["manifestation", "ondes positives", "reconnaissant", "rêver grand", "boulot", "motivation"]
-            if any(phrase in description for phrase in generic_phrases):
-                profile_confidence += 20
+            # Use AI evaluation on full profile data
+            profile_data = {
+                "tweet_count": tweet_count,
+                "z_score": z_score,
+                "username": username,
+                "name": name,
+                "description": description,
+                "location": location
+            }
+            profile_ai_score = self.query_openai_profile(profile_data)
+            # Incorporate AI score at 50% weight
+            profile_confidence += 0.5 * profile_ai_score
 
             profile_confidence *= self.profile_scale
+            # ------------------------------------------------------------------
 
-            # combine final signals with a weighted average
+            # Combine content and profile signals via weighted average
             final_confidence = ((self.content_weight * final_content_confidence) + (self.profile_weight * profile_confidence)) / (self.content_weight + self.profile_weight)
-
             is_bot = final_confidence >= self.classification_threshold
 
-            # print("RESULT = user:", username, "is_bot:", is_bot)
+            # Optional debug print:
+            # print(f"User {username}: Content Score = {final_content_confidence:.2f}, Profile Score = {profile_confidence:.2f}, Final Score = {final_confidence:.2f}")
 
             marked_accounts.append(DetectionMark(user_id=user_id, confidence=int(final_confidence), bot=is_bot))
-
+            
         return marked_accounts
