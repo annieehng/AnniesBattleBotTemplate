@@ -284,8 +284,10 @@ class Detector(ADetector):
             location = (user.get("location") or "").strip()
 
             # Tweet count heuristic: extreme counts can indicate bots
-            if tweet_count > 400:
+            if tweet_count > 1000:
                 profile_confidence += 30
+            elif tweet_count < 5:
+                profile_confidence += 20
 
             # Z-score heuristic: extreme z-scores indicate abnormal behavior
             if z_score > 5:
@@ -338,9 +340,9 @@ class Detector(ADetector):
                 "description": description,
                 "location": location
             }
-            profile_ai_score = self.query_openai_profile(profile_data)  # AI score for the full profile data
-            # Incorporate the AI score at 50% weight into the overall profile confidence (increased from 30%)
-            profile_confidence += 0.5 * profile_ai_score
+            profile_ai_score = self.query_openai_profile(profile_data) if description or username or name else 0
+            # Incorporate the AI score at 30% weight into the overall profile confidence
+            profile_confidence += 0.3 * profile_ai_score
 
             profile_confidence *= self.profile_scale
             # ------------------------------------------------------------------
