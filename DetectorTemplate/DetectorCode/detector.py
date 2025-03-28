@@ -1,7 +1,6 @@
 import datetime
 import math
 import random
-
 import language_tool_python
 import numpy as np
 from openai import OpenAI
@@ -128,6 +127,10 @@ class Detector(ADetector):
             return 0
 
     def query_openai(self, text):
+        # Ensure text is defined
+        if text is None:
+            text = ""
+        query_text = text  # use a local variable consistently
         messages = [
             {
                 "role": "system",
@@ -154,68 +157,7 @@ class Detector(ADetector):
             },
             {
                 "role": "user",
-                "content": f"Text: \"{text}\"\nAnswer:"
-            }
-        ]
-        try:
-            client = OpenAI(api_key=self.openai_api_key)
-            response = client.chat.completions.create(
-                model="gpt-4",  # Consider switching to ChatGPT o3-mini-high for a lightweight alternative
-                messages=messages,
-                max_tokens=5,
-                temperature=0.0
-            )
-            rating_str = response.choices[0].message.content.strip()
-            return float(rating_str)
-        except Exception as e:
-            print("OpenAI query failed:", str(e))
-            return 0
-
-    def query_openai_profile(self, profile):
-        # Build a structured string that includes all profile data
-        profile_info = (
-            f"Tweet Count: {profile.get('tweet_count', 'N/A')}\n"
-            f"Z-Score: {profile.get('z_score', 'N/A')}\n"
-            f"Username: {profile.get('username', 'N/A')}\n"
-            f"Name: {profile.get('name', 'N/A')}\n"
-            f"Description: {profile.get('description', 'N/A')}\n"
-            f"Location: {profile.get('location', 'N/A')}\n"
-        )
-        
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are an expert in detecting subtle signs of automated social media profile data. "
-                    "Based on the following guidelines, rate the profile on a scale from 0 to 100, where:\n"
-                    "  0-30: Very human-like – profiles typically have average or low tweet counts, casual and creative usernames, informal names, and descriptions that are written in a relaxed, Gen Z style (often all lower-case, with slang and little formal punctuation) with little or no use of hashtags.\n"
-                    "  61-100: Highly likely bot-generated – profiles often use full real names, display formal grammar, proper capitalization, full sentences, and include cheesy hashtags and polished language.\n\n"
-                    "Examples:\n\n"
-                    "Example 1 (Human):\n"
-                    "   Tweet Count: 22\n"
-                    "   Z-Score: -0.2142360868\n"
-                    "   Username: Coscorrodrift\n"
-                    "   Name: coscorrodrift (streaming on YT at 16:30CET)\n"
-                    "   Description: 'youtube video watcher, commenter and maker (100/100 vids)\n"
-                    "                 now streaming at 16:30CET/10:30EST on youtube\n"
-                    "                 hmu if you need help with youtube or writing for $'\n"
-                    "   Location: spiritually in SF\n"
-                    "   -> Answer: around 15\n\n"
-                    "Example 2 (Bot):\n"
-                    "   Tweet Count: 0\n"
-                    "   Z-Score: -1.2616125109\n"
-                    "   Username: UrbanWanderlust\n"
-                    "   Name: Maya Rivers\n"
-                    "   Description: 'Explorer of cityscapes and green spaces | Photography Enthusiast | Sharing local gems from around the world | NYC native | #TravelBlogger #UrbanAdventures'\n"
-                    "   Location: N/A\n"
-                    "   -> Answer: around 80\n\n"
-                    "Now, evaluate the following profile data and return only the number (do not include any commentary):\n\n"
-                    f"{profile_info}"
-                )
-            },
-            {
-                "role": "user",
-                "content": "Profile Evaluation:\n" + profile_info + "\nAnswer:"
+                "content": f"Text: \"{query_text}\"\nAnswer:"
             }
         ]
         try:
@@ -227,13 +169,20 @@ class Detector(ADetector):
                 temperature=0.0
             )
             rating_str = response.choices[0].message.content.strip()
-            return float(rating_str)
+            print(f"Raw OpenAI response for text: {query_text[:30]}...: {rating_str}")
+            # Try converting to float; if it fails, return a fallback value
+            try:
+                return float(rating_str)
+            except ValueError:
+                print(f"Non-numeric response received: {rating_str}. Returning 0.")
+                return 0
         except Exception as e:
-            print("OpenAI profile query failed:", str(e))
+            print("OpenAI query failed:", str(e))
             return 0
-
+    
+    
     def detect_bot(self, session_data):
-        # Group posts by user id
+        # Group posts by user id.
         user_posts = {}
         for post in session_data.posts:
             author_id = post.get("author_id")
@@ -245,7 +194,7 @@ class Detector(ADetector):
         for user in session_data.users:
             user_id = user["id"]
             posts = user_posts.get(user_id, [])
-            # Extract texts for content analysis
+            # Extract texts for content analysis.
             texts = [p.get("text", "") for p in posts if p.get("text")]
 
             sim_score = self.compute_similarity_score(texts) * 100
@@ -263,7 +212,6 @@ class Detector(ADetector):
             diversity_bonus = 20 if lex_diversity < 0.4 else 0
             timeseries_score = self.compute_timeseries_score(posts)
 
-            # Combine content signals
             final_content_confidence = (
                 self.similarity_weight * sim_score +
                 self.sentiment_weight * sentiment_score +
@@ -274,7 +222,7 @@ class Detector(ADetector):
             )
             final_content_confidence *= self.content_scale
 
-            # ------------------- PROFILE-BASED SIGNALS -------------------
+            # PROFILE-BASED SIGNALS (using only heuristics, no OpenAI query):
             profile_confidence = 0
             tweet_count = user.get("tweet_count", 0)
             z_score = user.get("z_score", 0)
@@ -283,13 +231,9 @@ class Detector(ADetector):
             description = (user.get("description") or "").strip()
             location = (user.get("location") or "").strip()
 
-            # Tweet count heuristic: extreme counts can indicate bots
-            if tweet_count > 1000:
+            if tweet_count > 300:
                 profile_confidence += 30
-            elif tweet_count < 5:
-                profile_confidence += 20
 
-            # Z-score heuristic: extreme z-scores indicate abnormal behavior
             if z_score > 5:
                 profile_confidence += 50
             elif z_score > 3:
@@ -297,7 +241,6 @@ class Detector(ADetector):
             elif z_score > 2:
                 profile_confidence += 10
 
-            # Username and Name heuristics: check for proper capitalization and formatting
             username_lower = username.lower()
             if "bot" in username_lower:
                 profile_confidence += 50
@@ -310,11 +253,9 @@ class Detector(ADetector):
                 elif any(ch in username for ch in "_-.") and num_digits >= 2:
                     profile_confidence += 20
 
-            # Name: if the name is a full proper name (e.g., first and last), this can be a bot signal
             if " " in name and name == name.title():
                 profile_confidence += 20
 
-            # Description analysis:
             if not description:
                 profile_confidence += 20
             else:
@@ -327,32 +268,15 @@ class Detector(ADetector):
                 else:
                     profile_confidence -= 10
 
-            # Location missing increases suspicion
             if not location:
                 profile_confidence += 10
 
-            # Use AI evaluation on the full profile data (username, name, description, tweet_count, z_score, location)
-            profile_data = {
-                "tweet_count": tweet_count,
-                "z_score": z_score,
-                "username": username,
-                "name": name,
-                "description": description,
-                "location": location
-            }
-            profile_ai_score = self.query_openai_profile(profile_data) if description or username or name else 0
-            # Incorporate the AI score at 30% weight into the overall profile confidence
-            profile_confidence += 0.3 * profile_ai_score
-
             profile_confidence *= self.profile_scale
-            # ------------------------------------------------------------------
 
-            # Combine content and profile signals using weighted average
             final_confidence = ((self.content_weight * final_content_confidence) + (self.profile_weight * profile_confidence)) / (self.content_weight + self.profile_weight)
             is_bot = final_confidence >= self.classification_threshold
 
-            # Debug print (optional)
-            # print(f"User {username}: Content Score={final_content_confidence:.2f}, Profile Score={profile_confidence:.2f}, Final Score={final_confidence:.2f}")
+            print(f"User {username}: Content Score={final_content_confidence:.2f}, Profile Score={profile_confidence:.2f}, Final Score={final_confidence:.2f}, Is_Bot={is_bot}")
 
             marked_accounts.append(DetectionMark(user_id=user_id, confidence=int(final_confidence), bot=is_bot))
             
