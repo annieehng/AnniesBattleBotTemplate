@@ -1,4 +1,4 @@
-FROM python:3.8
+FROM python:3.9-slim
 
 RUN apt-get update && apt-get install -y default-jdk && \
     pip install --upgrade pip && \
