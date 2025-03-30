@@ -1,3 +1,4 @@
+from __future__ import annotations
 import datetime
 import math
 import random
@@ -9,7 +10,6 @@ from sklearn.metrics.pairwise import cosine_similarity
 from transformers import pipeline
 from teams_classes import DetectionMark
 from abc_classes import ADetector
-
 
 class Detector(ADetector):
     def __init__(
@@ -45,10 +45,11 @@ class Detector(ADetector):
         self.grammar_error_threshold = grammar_error_threshold
         self.classification_threshold = classification_threshold
 
-        # Use a sentiment analysis model that supports French.
+        # Use a sentiment analysis model that supports French with PyTorch framework.
         self.sentiment_analyzer = pipeline(
             "sentiment-analysis",
-            model="nlptown/bert-base-multilingual-uncased-sentiment"
+            model="nlptown/bert-base-multilingual-uncased-sentiment",
+            framework="pt"
         )
         # Initialize the grammar tool for French.
         self.grammar_tool = language_tool_python.LanguageTool('fr')
@@ -71,7 +72,6 @@ class Detector(ADetector):
         for text in texts:
             try:
                 result = self.sentiment_analyzer(text)[0]
-                # Depending on the model, you might need to adjust how you interpret the score.
                 scores.append(float(result['score']))
             except Exception:
                 scores.append(0)
@@ -161,7 +161,7 @@ class Detector(ADetector):
                 return float(rating_str)
             except ValueError:
                 return 0
-        except Exception as e:
+        except Exception:
             return 0
 
     def detect_bot(self, session_data):
@@ -256,8 +256,6 @@ class Detector(ADetector):
 
             final_confidence = ((self.content_weight * final_content_confidence) + (self.profile_weight * profile_confidence)) / (self.content_weight + self.profile_weight)
             is_bot = final_confidence >= self.classification_threshold
-
-            # print(f"User {username}: Content Score={final_content_confidence:.2f}, Profile Score={profile_confidence:.2f}, Final Score={final_confidence:.2f}, Is_Bot={is_bot}")
 
             marked_accounts.append(DetectionMark(user_id=user_id, confidence=int(final_confidence), bot=is_bot))
             
