@@ -1,15 +1,38 @@
+
+from teams_classes import DetectionMark
+from abc_classes import ADetector
 import datetime
 import math
 import random
 import language_tool_python
 import numpy as np
+import pandas as pd
 from openai import OpenAI
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-from teams_classes import DetectionMark
 from transformers import pipeline
-from abc_classes import ADetector
+from sklearn.pipeline import Pipeline, FeatureUnion
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression
+from sklearn.base import BaseEstimator, TransformerMixin
 
+# Define a simple transformer to select a column from a DataFrame.
+class ColumnSelector(BaseEstimator, TransformerMixin):
+    def __init__(self, column):
+        self.column = column
+    def fit(self, X, y=None):
+        return self
+    def transform(self, X):
+        return X[self.column].values.astype("U")  # convert to unicode string
+
+# Transformer to select numeric columns
+class NumericSelector(BaseEstimator, TransformerMixin):
+    def __init__(self, column):
+        self.column = column
+    def fit(self, X, y=None):
+        return self
+    def transform(self, X):
+        return X[[self.column]]
 
 class Detector(ADetector):
     def __init__(
@@ -50,7 +73,7 @@ class Detector(ADetector):
             model="cardiffnlp/twitter-roberta-base-sentiment"
         )
         self.grammar_tool = language_tool_python.LanguageTool('en-US')
-
+        
     def compute_similarity_score(self, texts):
         if len(texts) < 2:
             return 0
@@ -69,7 +92,6 @@ class Detector(ADetector):
         for text in texts:
             try:
                 result = self.sentiment_analyzer(text)[0]
-                # treat 'neutral' as 0; otherwise, use the confidence score
                 scores.append(0 if result['label'].lower() == 'neutral' else result['score'])
             except Exception:
                 scores.append(0)
@@ -94,12 +116,6 @@ class Detector(ADetector):
         return np.mean(ratios) if ratios else 0
 
     def compute_timeseries_score(self, posts):
-        """
-        Compute a score based on the regularity (burstiness) of posting.
-        If a user posts many messages with very similar intervals (i.e. low coefficient of variation), that is more suspicious.
-        
-        Returns a score from 0 to 100.
-        """
         if len(posts) < 2:
             return 0
         times = []
@@ -127,10 +143,8 @@ class Detector(ADetector):
             return 0
 
     def query_openai(self, text):
-        # Ensure text is defined
         if text is None:
             text = ""
-        query_text = text  # use a local variable consistently
         messages = [
             {
                 "role": "system",
@@ -157,7 +171,7 @@ class Detector(ADetector):
             },
             {
                 "role": "user",
-                "content": f"Text: \"{query_text}\"\nAnswer:"
+                "content": f"Text: \"{text}\"\nAnswer:"
             }
         ]
         try:
@@ -169,20 +183,148 @@ class Detector(ADetector):
                 temperature=0.0
             )
             rating_str = response.choices[0].message.content.strip()
-            print(f"Raw OpenAI response for text: {query_text[:30]}...: {rating_str}")
-            # Try converting to float; if it fails, return a fallback value
+            print("query_openai: Raw response:", rating_str)
+            return float(rating_str)
+        except Exception as e:
+            print("query_openai query failed:", str(e))
+            return 0
+
+    def query_openai_profile(self, profile):
+        if not profile or not isinstance(profile, dict):
+            return 0.0
+        profile_info = (
+            f"Tweet Count: {profile.get('tweet_count', 'N/A')}\n"
+            f"Z-Score: {profile.get('z_score', 'N/A')}\n"
+            f"Username: {profile.get('username', 'N/A')}\n"
+            f"Name: {profile.get('name', 'N/A')}\n"
+            f"Description: {profile.get('description', 'N/A')}\n"
+            f"Location: {profile.get('location', 'N/A')}\n"
+        )
+        if not profile_info.strip():
+            return 0.0
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are an expert in detecting subtle signs of automated social media profile data. "
+                    "Based on the following guidelines, rate the profile on a scale from 0 to 100, where:\n"
+                    "  0-30: Very human-like – profiles typically have average or low tweet counts, casual and creative usernames, informal names, and descriptions written in a relaxed, Gen Z style (often all lower-case, with slang and little formal punctuation) with little or no use of hashtags.\n"
+                    "  61-100: Highly likely bot-generated – profiles often use full real names, display formal grammar, proper capitalization, full sentences, and include cheesy hashtags and polished language.\n\n"
+                    "Examples:\n\n"
+                    "Example 1 (Human):\n"
+                    "   Tweet Count: 22\n"
+                    "   Z-Score: -0.2142360868\n"
+                    "   Username: Coscorrodrift\n"
+                    "   Name: coscorrodrift (streaming on YT at 16:30CET)\n"
+                    "   Description: 'youtube video watcher, commenter and maker (100/100 vids)\n"
+                    "                 now streaming at 16:30CET/10:30EST on youtube\n"
+                    "                 hmu if you need help with youtube or writing for $'\n"
+                    "   Location: spiritually in SF\n"
+                    "   -> Answer: around 15\n\n"
+                    "Example 2 (Bot):\n"
+                    "   Tweet Count: 0\n"
+                    "   Z-Score: -1.2616125109\n"
+                    "   Username: UrbanWanderlust\n"
+                    "   Name: Maya Rivers\n"
+                    "   Description: 'Explorer of cityscapes and green spaces | Photography Enthusiast | Sharing local gems from around the world | NYC native | #TravelBlogger #UrbanAdventures'\n"
+                    "   Location: N/A\n"
+                    "   -> Answer: around 80\n\n"
+                    "Now, evaluate the following profile data and return only the number (do not include any commentary):\n\n"
+                    f"{profile_info}"
+                )
+            },
+            {
+                "role": "user",
+                "content": "Profile Evaluation:\n" + profile_info + "\nAnswer:"
+            }
+        ]
+        try:
+            client = OpenAI(api_key=self.openai_api_key)
+            response = client.chat.completions.create(
+                model="gpt-4",
+                messages=messages,
+                max_tokens=5,
+                temperature=0.0
+            )
+            rating_str = response.choices[0].message.content.strip()
+            print("query_openai_profile: Raw response:", rating_str)
             try:
                 return float(rating_str)
-            except ValueError:
-                print(f"Non-numeric response received: {rating_str}. Returning 0.")
-                return 0
+            except Exception:
+                return 0.0
         except Exception as e:
-            print("OpenAI query failed:", str(e))
-            return 0
-    
-    
+            print("query_openai_profile query failed:", str(e))
+            return 0.0
+
+    # Machine Learning Pipeline Methods (as defined previously)
+    def extract_features(self, session_data):
+        data = []
+        for user in session_data.users:
+            user_id = user.get("id")
+            posts = [p.get("text", "") for p in session_data.posts if p.get("author_id") == user_id]
+            aggregated_text = " ".join(posts)
+            data.append({
+                "user_id": user_id,
+                "text": aggregated_text,
+                "tweet_count": user.get("tweet_count", 0),
+                "z_score": user.get("z_score", 0),
+                "username": user.get("username", ""),
+                "name": user.get("name", ""),
+                "description": user.get("description", ""),
+                "location": user.get("location", ""),
+                "label": user.get("label")
+            })
+        return pd.DataFrame(data)
+
+    def train_ml_model(self, training_session_data):
+        df = self.extract_features(training_session_data)
+        df = df[df['label'].notnull()]
+        numeric_features = ['tweet_count', 'z_score']
+        text_feature = 'text'
+        
+        feature_union = FeatureUnion([
+            ("text", Pipeline([
+                ("selector", ColumnSelector(text_feature)),
+                ("tfidf", TfidfVectorizer(max_features=5000, ngram_range=(1, 2)))
+            ])),
+            ("tweet_count", Pipeline([
+                ("selector", NumericSelector("tweet_count")),
+                ("scaler", StandardScaler())
+            ])),
+            ("z_score", Pipeline([
+                ("selector", NumericSelector("z_score")),
+                ("scaler", StandardScaler())
+            ]))
+        ])
+        
+        self.ml_model = Pipeline([
+            ("features", feature_union),
+            ("classifier", LogisticRegression(max_iter=1000))
+        ])
+        
+        X = df.drop(columns=["user_id", "label"])
+        y = df["label"].astype(int)
+        self.ml_model.fit(X, y)
+        print("Machine learning model trained.")
+
+    def detect_bot_ml(self, session_data):
+        if self.ml_model is None:
+            print("ML model is not trained!")
+            return []
+        df = self.extract_features(session_data)
+        X = df.drop(columns=["user_id", "label"], errors='ignore')
+        predictions = self.ml_model.predict(X)
+        probabilities = self.ml_model.predict_proba(X)[:, 1]
+        marked_accounts = []
+        for idx, row in df.iterrows():
+            is_bot = predictions[idx] == 1
+            confidence = int(probabilities[idx] * 100)
+            marked_accounts.append(DetectionMark(user_id=row["user_id"], confidence=confidence, bot=is_bot))
+        return marked_accounts
+
+    # Heuristic-based detection method
     def detect_bot(self, session_data):
-        # Group posts by user id.
         user_posts = {}
         for post in session_data.posts:
             author_id = post.get("author_id")
@@ -194,23 +336,30 @@ class Detector(ADetector):
         for user in session_data.users:
             user_id = user["id"]
             posts = user_posts.get(user_id, [])
-            # Extract texts for content analysis.
             texts = [p.get("text", "") for p in posts if p.get("text")]
 
             sim_score = self.compute_similarity_score(texts) * 100
             sentiment_score = self.compute_sentiment_score(texts) * 100
             grammar_scores = [self.compute_grammar_score(t) for t in texts]
             avg_grammar_score = np.mean(grammar_scores) if grammar_scores else 0
-            openai_raw = self.query_openai(texts[0]) if texts else 0
-            try:
-                openai_score = float(openai_raw)
-            except Exception:
-                print(f"OpenAI query returned non-numeric value for user {user_id}: {openai_raw}")
-                openai_score = 0
+            
+            # Commenting out the OpenAI query for text due to quota limits
+            # openai_raw = self.query_openai(texts[0]) if texts else 0
+            # try:
+            #     openai_score = float(openai_raw)
+            # except Exception:
+            #     print(f"OpenAI query returned non-numeric value for user {user_id}: {openai_raw}")
+            #     openai_score = 0
+            openai_score = 0
 
             lex_diversity = self.compute_lexical_diversity(texts)
             diversity_bonus = 20 if lex_diversity < 0.4 else 0
             timeseries_score = self.compute_timeseries_score(posts)
+
+            if avg_grammar_score > 80:
+                grammar_bonus = (avg_grammar_score - 80) * 0.5
+            else:
+                grammar_bonus = 0
 
             final_content_confidence = (
                 self.similarity_weight * sim_score +
@@ -218,11 +367,11 @@ class Detector(ADetector):
                 self.grammar_weight * avg_grammar_score +
                 self.openai_weight * openai_score +
                 diversity_bonus +
-                self.timeseries_weight * timeseries_score
+                self.timeseries_weight * timeseries_score +
+                grammar_bonus
             )
             final_content_confidence *= self.content_scale
 
-            # PROFILE-BASED SIGNALS (using only heuristics, no OpenAI query):
             profile_confidence = 0
             tweet_count = user.get("tweet_count", 0)
             z_score = user.get("z_score", 0)
@@ -231,7 +380,7 @@ class Detector(ADetector):
             description = (user.get("description") or "").strip()
             location = (user.get("location") or "").strip()
 
-            if tweet_count > 300:
+            if tweet_count > 500:
                 profile_confidence += 30
 
             if z_score > 5:
@@ -271,6 +420,19 @@ class Detector(ADetector):
             if not location:
                 profile_confidence += 10
 
+            profile_data = {
+                "tweet_count": tweet_count,
+                "z_score": z_score,
+                "username": username,
+                "name": name,
+                "description": description,
+                "location": location
+            }
+            # Commenting out the OpenAI profile query due to quota limits
+            # profile_ai_score = self.query_openai_profile(profile_data) if description or username or name else 0
+            # profile_confidence += 0.3 * profile_ai_score
+            profile_confidence += 0
+
             profile_confidence *= self.profile_scale
 
             final_confidence = ((self.content_weight * final_content_confidence) + (self.profile_weight * profile_confidence)) / (self.content_weight + self.profile_weight)
@@ -281,6 +443,7 @@ class Detector(ADetector):
             marked_accounts.append(DetectionMark(user_id=user_id, confidence=int(final_confidence), bot=is_bot))
             
         return marked_accounts
+
 
 """
 first contest code:
