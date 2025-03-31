@@ -1,2 +1,4 @@
+human_data/*.json filter=lfs diff=lfs merge=lfs -text
+bot_data/*.json filter=lfs diff=lfs merge=lfs -text
 DetectorTemplate/human_data/*.json filter=lfs diff=lfs merge=lfs -text
 DetectorTemplate/bot_data/*.json filter=lfs diff=lfs merge=lfs -text
