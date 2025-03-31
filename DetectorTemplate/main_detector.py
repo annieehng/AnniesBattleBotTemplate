@@ -10,6 +10,7 @@ from teams_classes import DetectionMark
 from api_requests import get_session_data, submit_detection
 import json
 import openai
+import glob
 
 # Competition Environment Variables (normally set via env variables)
 session_id = int(os.getenv('SESSION_ID'))
@@ -21,7 +22,7 @@ openai_api_key = os.getenv("ENV_VAR1")
 
 
 # Testing Environment Variables
-# session_id = 10
+# session_id = 18
 # code_max_time = 3601 
 # openai_api_key = ""
 
@@ -79,6 +80,48 @@ try:
     logging.info(f"Get Session response status code: {get_session_response.status_code}")
     print("Get Session response status code:", get_session_response.status_code)
     # print("Get Session response content:", json.dumps(session_dataset.__dict__, indent=4))
+
+    # ------------------ NEW: Train ML Model Using Local Data ------------------
+    # Define the local folders (assumed to be in the same directory as main_detector.py)
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    human_folder = os.path.join(base_dir, "human_data")
+    bot_folder = os.path.join(base_dir, "bot_data")
+    
+    # Helper function to load and combine JSON files from a folder using a pattern
+    def load_combined_json(folder, pattern):
+        combined = []
+        file_pattern = os.path.join(folder, pattern)
+        for fp in glob.glob(file_pattern):
+            with open(fp, 'r') as f:
+                data = json.load(f)
+            combined.extend(data)
+        return combined
+
+    # Load all JSON files from the human and bot folders
+    human_posts = load_combined_json(human_folder, "session_*_human_posts.json")
+    human_users = load_combined_json(human_folder, "session_*_human_users.json")
+    bot_posts = load_combined_json(bot_folder, "session_*_bot_posts.json")
+    bot_users = load_combined_json(bot_folder, "session_*_bot_users.json")
+    
+    # Label users and ensure they have an "id" key
+    for user in human_users:
+        user["id"] = user["user_id"]
+        user["label"] = 0  # human
+    for user in bot_users:
+        user["id"] = user["user_id"]
+        user["label"] = 1  # bot
+
+    # Create a combined training dataset
+    class SessionData:
+        pass
+
+    training_session_data = SessionData()
+    training_session_data.posts = human_posts + bot_posts
+    training_session_data.users = human_users + bot_users
+
+    # Train the machine learning model on the combined training data
+    detector.train_ml_model(training_session_data)
+    logging.info("Machine learning model trained.")
 
     signal.signal(signal.SIGALRM, handler)
     signal.alarm(code_max_time)

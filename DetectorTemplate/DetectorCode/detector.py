@@ -308,23 +308,29 @@ class Detector(ADetector):
         self.ml_model.fit(X, y)
         print("Machine learning model trained.")
 
-    def detect_bot_ml(self, session_data):
+    # ML detection method
+    def detect_bot(self, session_data):
         if self.ml_model is None:
             print("ML model is not trained!")
             return []
         df = self.extract_features(session_data)
         X = df.drop(columns=["user_id", "label"], errors='ignore')
         predictions = self.ml_model.predict(X)
-        probabilities = self.ml_model.predict_proba(X)[:, 1]
+        probabilities = self.ml_model.predict_proba(X)[:, 1]  # Probability of being bot
         marked_accounts = []
+        bot_count = 0
         for idx, row in df.iterrows():
             is_bot = predictions[idx] == 1
+            if is_bot:
+                bot_count += 1
             confidence = int(probabilities[idx] * 100)
+            print(f"ML Detection -> User {row['username']}: Confidence: {confidence}, Is_Bot: {is_bot}")
             marked_accounts.append(DetectionMark(user_id=row["user_id"], confidence=confidence, bot=is_bot))
+        print(f"ML Detection Summary: Detected {bot_count} bots out of {len(df)} users.")
         return marked_accounts
 
-    # Heuristic-based detection method
-    def detect_bot(self, session_data):
+    # Heuristic-based + openai detection method
+    def detect_bot_heuristic_openai(self, session_data):
         user_posts = {}
         for post in session_data.posts:
             author_id = post.get("author_id")
@@ -438,7 +444,7 @@ class Detector(ADetector):
             final_confidence = ((self.content_weight * final_content_confidence) + (self.profile_weight * profile_confidence)) / (self.content_weight + self.profile_weight)
             is_bot = final_confidence >= self.classification_threshold
 
-            # print(f"User {username}: Content Score={final_content_confidence:.2f}, Profile Score={profile_confidence:.2f}, Final Score={final_confidence:.2f}, Is_Bot={is_bot}")
+            print(f"User {username}: Content Score={final_content_confidence:.2f}, Profile Score={profile_confidence:.2f}, Final Score={final_confidence:.2f}, Is_Bot={is_bot}")
 
             marked_accounts.append(DetectionMark(user_id=user_id, confidence=int(final_confidence), bot=is_bot))
             
