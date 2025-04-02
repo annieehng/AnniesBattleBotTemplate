@@ -3,15 +3,14 @@ import requests
 import json
 
 # Competition Environment Variables
-base_url = os.getenv('BASE_URL')
-authentication_token = os.getenv('AUTH_TOKEN')
-session_id = os.getenv('SESSION_ID')
-header = {'Authorization': 'bearer ' + authentication_token, 'Content-Type': 'application/json'}
+# base_url = os.getenv('BASE_URL')
+# authentication_token = os.getenv('AUTH_TOKEN')
+# session_id = os.getenv('SESSION_ID')
+# header = {'Authorization': 'bearer ' + authentication_token, 'Content-Type': 'application/json'}
 
 
 # Testing Environment Variables
 
-"""
 base_url = 'http://3.92.68.65:3000/api/test/16'
 try:
     login_response = requests.post('http://3.92.68.65:3000/api/auth/login', headers={'Content-Type': 'application/json'}, data=json.dumps({"team_name": "anniedetector1", "team_password": "ItsBubz123"}))
@@ -23,7 +22,7 @@ except(requests.exceptions.RequestException) as error:
 session_id = 18
 
 header = {'Authorization': 'bearer ' + authentication_token, 'Content-Type': 'application/json'}
-"""
+
 
 
 #BOT SECTION
