@@ -206,7 +206,7 @@ try:
 
     # Plot performance evaluation based on detection results.
     # This assumes that session_dataset.users include ground truth labels.
-    plot_detected_bots(marked_account)
+    # plot_detected_bots(marked_account)
     
     signal.alarm(0)
     logging.info(f"END SESSION {session_id}")
