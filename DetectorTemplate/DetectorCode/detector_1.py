@@ -107,7 +107,8 @@ class Detector(ADetector):
             if row["user_id"] is None:
                 print(f"Warning: User ID is None for row {idx}, skipping...")
                 continue
-            # print(f"ML Detection -> User {row['username']}: Confidence: {confidence}, Is_Bot: {is_bot}")
+            print(f"ML Detection -> User {row['username']}: Confidence: {confidence}, Is_Bot: {is_bot}")
             marked_accounts.append(DetectionMark(user_id=row["user_id"], confidence=confidence, bot=is_bot))
-        # print(f"ML Detection Summary: Detected {bot_count} bots out of {len(df)} users.")
+        print(f"ML Detection Summary: Detected {bot_count} bots out of {len(df)} users.")
         return marked_accounts
+

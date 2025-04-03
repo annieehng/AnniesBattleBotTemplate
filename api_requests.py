@@ -12,7 +12,7 @@ header = {'Authorization': 'bearer ' + authentication_token, 'Content-Type': 'ap
 # Testing Environment Variables
 
 """
-base_url = 'http://3.92.68.65:3000/api/test/17'
+base_url = 'http://3.92.68.65:3000/api/test/19'
 try:
     login_response = requests.post('http://3.92.68.65:3000/api/auth/login', headers={'Content-Type': 'application/json'}, data=json.dumps({"team_name": "anniedetector1", "team_password": "ItsBubz123"}))
     login_response.raise_for_status()

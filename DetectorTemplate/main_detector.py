@@ -68,7 +68,10 @@ def handler(signum, frame):
 logging.info(f"START SESSION {session_id}")
 
 try:
-    detector = Detector(openai_api_key=openai_api_key)
+    
+    # detector = Detector(openai_api_key=openai_api_key)
+    detector = Detector()
+
     get_session_response, session_dataset = get_session_data()
     
     all_id_set = set()
