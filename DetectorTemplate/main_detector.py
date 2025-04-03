@@ -17,18 +17,18 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 # Competition Environment Variables (normally set via env variables)
-# session_id = int(os.getenv('SESSION_ID'))
-# code_max_time = int(os.getenv('MAX_TIME'))
-# openai_api_key = os.getenv("ENV_VAR1")
+session_id = int(os.getenv('SESSION_ID'))
+code_max_time = int(os.getenv('MAX_TIME'))
+openai_api_key = os.getenv("ENV_VAR1")
 # in registration, put the api key in the string value
 
 # print(f"DEBUG: env_var1 = {openai_api_key}")
 
 
 # Testing Environment Variables
-session_id = 18
-code_max_time = 3601 
-openai_api_key = ""
+# session_id = 18
+# code_max_time = 3601 
+# openai_api_key = ""
 
 # print("session_id:", session_id)
 # print("Current working directory:", os.getcwd())
@@ -109,7 +109,7 @@ try:
 
     # create detector object 
     
-    detector = Detector(openai_api_key=openai_api_key)
+    detector = Detector()
 
     # detector = EnsembleDetector(openai_api_key=openai_api_key)
 
