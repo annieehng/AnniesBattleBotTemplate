@@ -12,6 +12,10 @@ import json
 import openai
 import glob
 
+# For plotting and performance evaluation.
+import matplotlib.pyplot as plt
+import pandas as pd
+
 # Competition Environment Variables (normally set via env variables)
 # session_id = int(os.getenv('SESSION_ID'))
 # code_max_time = int(os.getenv('MAX_TIME'))
@@ -67,8 +71,48 @@ def handler(signum, frame):
 
 logging.info(f"START SESSION {session_id}")
 
+# function to plot results
+def plot_detected_bots(detections):
+    """
+    Plots a bar chart of detected bots and their confidence scores.
+    
+    Parameters:
+      detections (list): List of DetectionMark objects, each with attributes:
+                         - user_id (or username)
+                         - confidence (an integer 0-100)
+                         - bot (boolean indicating if detected as bot)
+    """
+    # Filter to keep only detected bots.
+    bots = [d for d in detections if d.bot]
+    
+    if not bots:
+        print("No bots detected.")
+        return
+
+    # Create a DataFrame from the detected bots.
+    bot_data = pd.DataFrame({
+        "User": [d.user_id for d in bots],
+        "Confidence": [d.confidence for d in bots]
+    })
+
+    # Create a bar plot.
+    plt.figure(figsize=(10, 6))
+    plt.bar(bot_data["User"], bot_data["Confidence"], color="red")
+    plt.xlabel("User ID")
+    plt.ylabel("Confidence Score")
+    plt.title("Detected Bots and Their Confidence Scores")
+    plt.xticks(rotation=45, ha="right")
+    plt.tight_layout()
+    plt.show()
+
 try:
+
+    # create detector object 
+    
     detector = Detector(openai_api_key=openai_api_key)
+
+    # detector = EnsembleDetector(openai_api_key=openai_api_key)
+
     get_session_response, session_dataset = get_session_data()
     
     all_id_set = set()
@@ -126,7 +170,13 @@ try:
     signal.signal(signal.SIGALRM, handler)
     signal.alarm(code_max_time)
     try:
+
+        # detector call here 
+
         marked_account = detector.detect_bot(session_dataset)
+        # marked_account = detector.detect_bot_ensemble(session_dataset)
+
+
         if not isinstance(marked_account[0], DetectionMark):  # Check each element is a DetectionMark
             raise TypeError(f"Expected DetectionMark instance, got {type(marked_account[0])}.")
         
@@ -153,6 +203,10 @@ try:
     
     logging.info(f"Detection Submission response status code: {submission_confirmation.status_code}")
     print("Detection Submission response status code:", submission_confirmation.status_code)
+
+    # Plot performance evaluation based on detection results.
+    # This assumes that session_dataset.users include ground truth labels.
+    plot_detected_bots(marked_account)
     
     signal.alarm(0)
     logging.info(f"END SESSION {session_id}")

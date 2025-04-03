@@ -1,3 +1,4 @@
+
 from teams_classes import DetectionMark
 from abc_classes import ADetector
 import datetime
@@ -12,9 +13,10 @@ from sklearn.metrics.pairwise import cosine_similarity
 from transformers import pipeline
 from sklearn.pipeline import Pipeline, FeatureUnion
 from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression
 from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.model_selection import StratifiedKFold, cross_val_score
-from sklearn.ensemble import RandomForestClassifier
+from sentence_transformers import SentenceTransformer
+from sklearn.base import BaseEstimator, TransformerMixin
 
 # Define a simple transformer to select a column from a DataFrame.
 class ColumnSelector(BaseEstimator, TransformerMixin):
@@ -25,7 +27,7 @@ class ColumnSelector(BaseEstimator, TransformerMixin):
     def transform(self, X):
         return X[self.column].values.astype("U")  # convert to unicode string
 
-# Transformer to select numeric columns.
+# Transformer to select numeric columns
 class NumericSelector(BaseEstimator, TransformerMixin):
     def __init__(self, column):
         self.column = column
@@ -33,6 +35,16 @@ class NumericSelector(BaseEstimator, TransformerMixin):
         return self
     def transform(self, X):
         return X[[self.column]]
+    
+# Transformer for Sentence Embeddings
+class EmbeddingTransformer(BaseEstimator, TransformerMixin):
+    def __init__(self, model_name="all-MiniLM-L6-v2"):
+        self.model = SentenceTransformer(model_name)
+    def fit(self, X, y=None):
+        return self
+    def transform(self, X):
+        # X should be an iterable of texts
+        return self.model.encode(X, convert_to_numpy=True)
 
 class Detector(ADetector):
     def __init__(
@@ -73,8 +85,7 @@ class Detector(ADetector):
             model="cardiffnlp/twitter-roberta-base-sentiment"
         )
         self.grammar_tool = language_tool_python.LanguageTool('en-US')
-        self.ml_model = None  # Will be set during training
-
+        
     def compute_similarity_score(self, texts):
         if len(texts) < 2:
             return 0
@@ -190,7 +201,7 @@ class Detector(ADetector):
             print("query_openai query failed:", str(e))
             return 0
 
-    # Machine Learning Pipeline Methods
+    # Machine Learning Pipeline Methods (as defined previously)
     def extract_features(self, session_data):
         data = []
         for user in session_data.users:
@@ -210,19 +221,19 @@ class Detector(ADetector):
             })
         return pd.DataFrame(data)
 
+    # Modified training method using EmbeddingTransformer
     def train_ml_model(self, training_session_data):
-        """
-        Train the machine learning model using a stratified train-test split and stratified k-fold cross-validation
-        to ensure balanced proportions of bots/humans and to check generalizability.
-        We replace Logistic Regression with RandomForestClassifier for increased robustness.
-        """
         df = self.extract_features(training_session_data)
         df = df[df['label'].notnull()]
-        text_feature = 'text'
         
-        # Define feature union with TF-IDF features and numeric features.
+        # Instead of using only TfidfVectorizer, combine it with embeddings
+        text_feature = 'text'
         feature_union = FeatureUnion([
-            ("text", Pipeline([
+            ("embeddings", Pipeline([
+                ("selector", ColumnSelector(text_feature)),
+                ("embedder", EmbeddingTransformer("all-MiniLM-L6-v2"))
+            ])),
+            ("tfidf", Pipeline([
                 ("selector", ColumnSelector(text_feature)),
                 ("tfidf", TfidfVectorizer(max_features=5000, ngram_range=(1, 2)))
             ])),
@@ -236,31 +247,15 @@ class Detector(ADetector):
             ]))
         ])
         
-        # Use a RandomForestClassifier.
-        classifier = RandomForestClassifier(
-            n_estimators=100, 
-            random_state=42, 
-            class_weight='balanced'
-        )
-        
         self.ml_model = Pipeline([
             ("features", feature_union),
-            ("classifier", classifier)
+            ("classifier", LogisticRegression(max_iter=1000, class_weight='balanced'))
         ])
         
-        # Prepare features and labels.
         X = df.drop(columns=["user_id", "label"])
         y = df["label"].astype(int)
-        
-        # Perform Stratified K-Fold Cross-Validation.
-        skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-        cv_scores = cross_val_score(self.ml_model, X, y, cv=skf, scoring='accuracy')
-        print("Stratified K-Fold CV Accuracy Scores: ", cv_scores)
-        print("Mean CV Accuracy: {:.2f}".format(cv_scores.mean()))
-        
-        # Fit the model on the entire training set.
         self.ml_model.fit(X, y)
-        print("Machine learning model trained with RandomForestClassifier.")
+        print("Machine learning model trained.")
 
     # ML detection method
     def detect_bot(self, session_data):
@@ -270,7 +265,7 @@ class Detector(ADetector):
         df = self.extract_features(session_data)
         X = df.drop(columns=["user_id", "label"], errors='ignore')
         predictions = self.ml_model.predict(X)
-        probabilities = self.ml_model.predict_proba(X)[:, 1]  # Probability of being bot.
+        probabilities = self.ml_model.predict_proba(X)[:, 1]  # Probability of being bot
         marked_accounts = []
         bot_count = 0
         for idx, row in df.iterrows():
@@ -282,3 +277,6 @@ class Detector(ADetector):
             marked_accounts.append(DetectionMark(user_id=row["user_id"], confidence=confidence, bot=is_bot))
         print(f"ML Detection Summary: Detected {bot_count} bots out of {len(df)} users.")
         return marked_accounts
+
+
+
