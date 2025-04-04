@@ -13,8 +13,8 @@ import openai
 import glob
 
 # For plotting and performance evaluation.
-import matplotlib.pyplot as plt
-import pandas as pd
+# import matplotlib.pyplot as plt
+# import pandas as pd
 
 # Competition Environment Variables (normally set via env variables)
 session_id = int(os.getenv('SESSION_ID'))
@@ -71,17 +71,11 @@ def handler(signum, frame):
 
 logging.info(f"START SESSION {session_id}")
 
+"""
 # function to plot results
 def plot_detected_bots(detections):
-    """
-    Plots a bar chart of detected bots and their confidence scores.
+
     
-    Parameters:
-      detections (list): List of DetectionMark objects, each with attributes:
-                         - user_id (or username)
-                         - confidence (an integer 0-100)
-                         - bot (boolean indicating if detected as bot)
-    """
     # Filter to keep only detected bots.
     bots = [d for d in detections if d.bot]
     
@@ -95,6 +89,7 @@ def plot_detected_bots(detections):
         "Confidence": [d.confidence for d in bots]
     })
 
+    
     # Create a bar plot.
     plt.figure(figsize=(10, 6))
     plt.bar(bot_data["User"], bot_data["Confidence"], color="red")
@@ -104,6 +99,8 @@ def plot_detected_bots(detections):
     plt.xticks(rotation=45, ha="right")
     plt.tight_layout()
     plt.show()
+"""
+
 
 try:
 
