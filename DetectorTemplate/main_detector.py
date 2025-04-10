@@ -26,7 +26,7 @@ openai_api_key = os.getenv("ENV_VAR1")
 
 
 # Testing Environment Variables
-# session_id = 18
+# session_id = 20
 # code_max_time = 3601 
 # openai_api_key = ""
 

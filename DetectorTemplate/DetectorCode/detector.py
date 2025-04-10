@@ -6,8 +6,13 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.pipeline import Pipeline, FeatureUnion
 from sklearn.preprocessing import StandardScaler
 from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.model_selection import StratifiedKFold, cross_val_score
+from sklearn.model_selection import StratifiedKFold, cross_validate
 from sklearn.ensemble import RandomForestClassifier
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics import make_scorer, precision_score, recall_score, f1_score
+from xgboost import XGBClassifier
+
+
 
 # transformer function to select a column from a datafr
 class ColumnSelector(BaseEstimator, TransformerMixin):
@@ -26,6 +31,17 @@ class NumericSelector(BaseEstimator, TransformerMixin):
         return self
     def transform(self, X):
         return X[[self.column]]
+
+class EmbeddingTransformer(BaseEstimator, TransformerMixin):
+    def __init__(self, model_name="all-MiniLM-L6-v2"):
+        self.model_name = model_name
+        self.model = SentenceTransformer(model_name)
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        return np.array([self.model.encode(text) for text in X])
 
 class Detector(ADetector):
     def __init__(self):
@@ -53,49 +69,48 @@ class Detector(ADetector):
     def train_ml_model(self, training_session_data):
         df = self.extract_features(training_session_data)
         df = df[df['label'].notnull()]
-        text_feature = 'text'
-        
-        # def feature union with TF-IDF features and numeric features
+        df.fillna(0, inplace=True)
+
+        X = df.drop(columns=["user_id", "label"])
+        y = df["label"].astype(int)
+
+        # Test with only TF-IDF features
         feature_union = FeatureUnion([
-            ("text", Pipeline([
-                ("selector", ColumnSelector(text_feature)),
+            ("tfidf", Pipeline([
+                ("selector", ColumnSelector("text")),
                 ("tfidf", TfidfVectorizer(max_features=5000, ngram_range=(1, 2)))
-            ])),
-            ("tweet_count", Pipeline([
-                ("selector", NumericSelector("tweet_count")),
-                ("scaler", StandardScaler())
-            ])),
-            ("z_score", Pipeline([
-                ("selector", NumericSelector("z_score")),
-                ("scaler", StandardScaler())
             ]))
         ])
-        
-        # RandomForestClassifier
-        classifier = RandomForestClassifier(
-            n_estimators=100, 
-            random_state=42, 
-            class_weight='balanced'
+
+        classifier = XGBClassifier(
+            n_estimators=300,  # Increase estimators
+            max_depth=10,
+            learning_rate=0.05,  # Reduce learning rate
+            scale_pos_weight=len(y[y == 0]) / len(y[y == 1]),
+            random_state=42
         )
-        
+
         self.ml_model = Pipeline([
             ("features", feature_union),
             ("classifier", classifier)
         ])
-        
-        # prep features and labels
-        X = df.drop(columns=["user_id", "label"])
-        y = df["label"].astype(int)
-        
-        # perform stratified k-fold cross-validation
+
         skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-        cv_scores = cross_val_score(self.ml_model, X, y, cv=skf, scoring='accuracy')
-        print("Stratified K-Fold CV Accuracy Scores: ", cv_scores)
-        print("Mean CV Accuracy: {:.2f}".format(cv_scores.mean()))
+        scoring = {
+            'accuracy': 'accuracy',
+            'precision': make_scorer(precision_score, average='binary'),
+            'recall': make_scorer(recall_score, average='binary'),
+            'f1': make_scorer(f1_score, average='binary')
+        }
         
-        # fit the model on entire training set
+        cv_results = cross_validate(self.ml_model, X, y, cv=skf, scoring=scoring)
+        print("Recall Scores:", cv_results['test_recall'])
+        print("Mean Recall:", cv_results['test_recall'].mean())
+        print("F1 Scores:", cv_results['test_f1'])
+        print("Mean F1 Score:", cv_results['test_f1'].mean())
+
         self.ml_model.fit(X, y)
-        print("Machine learning model trained with RandomForestClassifier.")
+        print("Model trained.")
 
     def detect_bot(self, session_data):
         if self.ml_model is None:
@@ -103,8 +118,9 @@ class Detector(ADetector):
             return []
         df = self.extract_features(session_data)
         X = df.drop(columns=["user_id", "label"], errors='ignore')
-        predictions = self.ml_model.predict(X)
-        probabilities = self.ml_model.predict_proba(X)[:, 1]  # prob of being bot
+        probabilities = self.ml_model.predict_proba(X)[:, 1]
+        threshold = 0.4  # Example: Lower threshold to improve recall
+        predictions = (probabilities >= threshold).astype(int)
         marked_accounts = []
         bot_count = 0
         for idx, row in df.iterrows():
