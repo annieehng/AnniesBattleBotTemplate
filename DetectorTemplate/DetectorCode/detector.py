@@ -3,16 +3,16 @@ from abc_classes import ADetector
 import numpy as np
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
-import nltk
-from nltk.corpus import stopwords
 from sklearn.pipeline import Pipeline, FeatureUnion
 from sklearn.preprocessing import StandardScaler
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.model_selection import StratifiedKFold, cross_validate
+from sklearn.ensemble import RandomForestClassifier
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics import make_scorer, precision_score, recall_score, f1_score
+from xgboost import XGBClassifier
 
-# download French stopwords (if not already downloaded)
-nltk.download('stopwords')
-french_stop_words = stopwords.words('french')
+
 
 class ColumnSelector(BaseEstimator, TransformerMixin):
     def __init__(self, column):
@@ -56,38 +56,48 @@ class Detector(ADetector):
     def train_ml_model(self, training_session_data):
         df = self.extract_features(training_session_data)
         df = df[df['label'].notnull()]
-        text_feature = 'text'
-        
+        df.fillna(0, inplace=True)
+
+        X = df.drop(columns=["user_id", "label"])
+        y = df["label"].astype(int)
+
+        # Test with only TF-IDF features
         feature_union = FeatureUnion([
-            ("text", Pipeline([
-                ("selector", ColumnSelector(text_feature)),
-                ("tfidf", TfidfVectorizer(max_features=5000, ngram_range=(1, 2), stop_words=french_stop_words))
-            ])),
-            ("tweet_count", Pipeline([
-                ("selector", NumericSelector("tweet_count")),
-                ("scaler", StandardScaler())
-            ])),
-            ("z_score", Pipeline([
-                ("selector", NumericSelector("z_score")),
-                ("scaler", StandardScaler())
+            ("tfidf", Pipeline([
+                ("selector", ColumnSelector("text")),
+                ("tfidf", TfidfVectorizer(max_features=5000, ngram_range=(1, 2)))
             ]))
         ])
-        
-        classifier = RandomForestClassifier(
-            n_estimators=100,
-            random_state=42,
-            class_weight='balanced'
+
+        classifier = XGBClassifier(
+            n_estimators=300,  # Increase estimators
+            max_depth=10,
+            learning_rate=0.05,  # Reduce learning rate
+            scale_pos_weight=len(y[y == 0]) / len(y[y == 1]),
+            random_state=42
         )
-        
+
         self.ml_model = Pipeline([
             ("features", feature_union),
             ("classifier", classifier)
         ])
+
+        skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+        scoring = {
+            'accuracy': 'accuracy',
+            'precision': make_scorer(precision_score, average='binary'),
+            'recall': make_scorer(recall_score, average='binary'),
+            'f1': make_scorer(f1_score, average='binary')
+        }
         
-        X = df.drop(columns=["user_id", "label"])
-        y = df["label"].astype(int)
+        cv_results = cross_validate(self.ml_model, X, y, cv=skf, scoring=scoring)
+        print("Recall Scores:", cv_results['test_recall'])
+        print("Mean Recall:", cv_results['test_recall'].mean())
+        print("F1 Scores:", cv_results['test_f1'])
+        print("Mean F1 Score:", cv_results['test_f1'].mean())
+
         self.ml_model.fit(X, y)
-        print("Machine learning model trained with RandomForestClassifier for French data")
+        print("Model trained.")
 
     def detect_bot(self, session_data):
         if self.ml_model is None:
@@ -109,5 +119,5 @@ class Detector(ADetector):
                 continue
             # print(f"ML Detection -> User {row['username']}: Confidence: {confidence}, Is_Bot: {is_bot}")
             marked_accounts.append(DetectionMark(user_id=row["user_id"], confidence=confidence, bot=is_bot))
-        # print(f"ML Detection Summary: Detected {bot_count} bots out of {len(df)} users.")
+        print(f"ML Detection Summary: Detected {bot_count} bots out of {len(df)} users.")
         return marked_accounts
